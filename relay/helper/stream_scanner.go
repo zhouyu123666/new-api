@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -96,6 +97,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		wg          sync.WaitGroup // 用于等待所有 goroutine 退出
 		cleanupOnce sync.Once
 		stopOnce    sync.Once
+		closedByUs  atomic.Bool
 	)
 
 	stop := func() {
@@ -126,6 +128,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			cancel()
 			stop()
 			if resp.Body != nil {
+				closedByUs.Store(true)
 				_ = resp.Body.Close()
 			}
 
@@ -257,7 +260,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			if data[:5] != "data:" && data[:6] != "[DONE]" {
 				continue
 			}
-			data = data[5:]
+			// 只有带 data: 前缀时才裁剪；裸 [DONE] 必须原样保留，
+			// 否则会被切成 "]" 并当作数据块下发，永远命中不到下面的结束判断。
+			if data[:5] == "data:" {
+				data = data[5:]
+			}
 			data = strings.TrimSpace(data)
 			if data == "" {
 				continue
@@ -281,7 +288,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		}
 
 		if err := scanner.Err(); err != nil {
-			if err != io.EOF {
+			if err != io.EOF && !closedByUs.Load() {
 				logger.LogError(c, "scanner error: "+err.Error())
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
 			}
