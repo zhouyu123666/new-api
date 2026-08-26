@@ -131,6 +131,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				imageCounter.Commit(info)
 				imageCommitted = true
 			}
+			// Responses 协议以 response.completed/done 作为终态，没有 data: [DONE]。
+			// 这里显式声明正常结束，避免客户端收到终态后立刻断开时，
+			// 主循环先命中 context 取消而把完整请求误判为 client_gone。
+			sr.Done()
 		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 			if !imageCommitted {
 				imageCounter.Reset()
