@@ -60,6 +60,8 @@ export const STATIC_I18N_KEYS = [
   'Token-based',
   'Per Request',
   'All Types',
+  'Stream Error',
+  'Requests with Retries',
   'Chat',
   'Response',
   'Anthropic',

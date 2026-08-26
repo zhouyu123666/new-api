@@ -68,6 +68,18 @@ export const LOG_TYPE_ENUM = {
  */
 export const LOG_TYPE_ALL_VALUE = '0' as const
 
+/**
+ * Special filter value for stream requests that ended with an error.
+ * This is not a persisted log type; the backend matches Other.stream_status.
+ */
+export const LOG_TYPE_STREAM_ERROR_VALUE = 'stream_error' as const
+
+/**
+ * Special filter value for requests that used more than one channel attempt.
+ * This is not a persisted log type; the backend matches the retry chain.
+ */
+export const LOG_TYPE_RETRY_VALUE = 'retry' as const
+
 // ============================================================================
 // Time Range Presets
 // ============================================================================
@@ -101,7 +113,7 @@ export const LOG_TYPES = [
 ] as const
 
 /**
- * Log types for DataTableToolbar filters (single select mode)
+ * Log type and special filters for DataTableToolbar (single select mode)
  * Backend treats type=0 as "all logs" in list/stat endpoints, so the filter
  * must not expose the display-only "Unknown" label for that value.
  */
@@ -113,7 +125,15 @@ export const LOG_TYPE_FILTERS = [
       value: String(type.value),
     })
   ),
+  { label: 'Stream Error', value: LOG_TYPE_STREAM_ERROR_VALUE },
+  { label: 'Requests with Retries', value: LOG_TYPE_RETRY_VALUE },
 ] as const
+
+export function getLogTypeFilters(isAdminView: boolean) {
+  return isAdminView
+    ? LOG_TYPE_FILTERS
+    : LOG_TYPE_FILTERS.filter((filter) => filter.value !== LOG_TYPE_RETRY_VALUE)
+}
 
 // ============================================================================
 // Drawing Logs (MjProxy) Constants
