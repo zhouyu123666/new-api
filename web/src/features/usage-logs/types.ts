@@ -315,6 +315,8 @@ export interface GetLogsParams {
   p?: number
   page_size?: number
   type?: number
+  stream_error?: boolean
+  retry?: boolean
   username?: string
   token_name?: string
   model_name?: string
@@ -339,6 +341,8 @@ export interface GetLogsResponse {
 
 export interface GetLogStatsParams {
   type?: number
+  stream_error?: boolean
+  retry?: boolean
   username?: string
   token_name?: string
   model_name?: string
