@@ -181,6 +181,31 @@ export interface ChannelOpsResponse {
   }
 }
 
+/** One block of the channel status health bar, oldest block first. */
+export interface ChannelHealthBucket {
+  success: number
+  failed: number
+}
+
+export interface ChannelHealthItem {
+  channel_id: number
+  /** Absent when the channel had no traffic in the window. */
+  buckets?: ChannelHealthBucket[] | null
+  /** Relay attempts currently running on the node that served the request. */
+  in_flight: number
+}
+
+export interface ChannelHealthResponse {
+  success: boolean
+  message?: string
+  data?: {
+    items: ChannelHealthItem[]
+    block_count: number
+    block_seconds: number
+    start_ts: number
+  }
+}
+
 export interface ChannelTestResponse {
   success: boolean
   message?: string
