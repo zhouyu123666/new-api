@@ -25,6 +25,7 @@ import type {
   BatchSetTagParams,
   Channel,
   ChannelBalanceResponse,
+  ChannelHealthResponse,
   ChannelOpsResponse,
   ChannelTestResponse,
   CopyChannelParams,
@@ -110,6 +111,20 @@ export async function getChannel(id: number): Promise<GetChannelResponse> {
  */
 export async function getChannelOps(): Promise<ChannelOpsResponse> {
   const res = await api.get('/api/channel/ops', channelActionConfig())
+  return res.data
+}
+
+/**
+ * Get the recent success/failure history and in-flight request count of the
+ * given channels. Scoped to the ids of the current table page.
+ */
+export async function getChannelHealth(
+  channelIds: number[]
+): Promise<ChannelHealthResponse> {
+  const res = await api.get('/api/channel/health', {
+    params: { ids: channelIds.join(',') },
+    ...channelActionConfig(),
+  })
   return res.data
 }
 
