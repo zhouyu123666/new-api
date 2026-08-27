@@ -100,6 +100,8 @@ interface ChannelHealthBarProps {
   blockSeconds: number
   /** Unix seconds at which the first block starts. */
   startTs: number
+  /** Called with the block start when a user selects a time slice. */
+  onBlockClick?: (startTs: number) => void
   className?: string
 }
 
@@ -130,6 +132,7 @@ export function ChannelHealthBar({
   blockCount,
   blockSeconds,
   startTs,
+  onBlockClick,
   className,
 }: ChannelHealthBarProps) {
   const { t } = useTranslation()
@@ -189,6 +192,8 @@ export function ChannelHealthBar({
                     <div
                       aria-label={range}
                       data-health-block-index={index}
+                      role={onBlockClick ? 'button' : undefined}
+                      tabIndex={onBlockClick ? 0 : undefined}
                       className={cn(
                         'h-3.5 min-w-[3px] flex-1 origin-center cursor-pointer rounded-[2px] transition-[transform,opacity] duration-150 hover:scale-y-[1.8] hover:opacity-90',
                         block.rate === IDLE_RATE && 'bg-border'
@@ -198,6 +203,13 @@ export function ChannelHealthBar({
                           ? undefined
                           : { backgroundColor: rateToColor(block.rate) }
                       }
+                      onClick={() => onBlockClick?.(block.startTs)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          onBlockClick?.(block.startTs)
+                        }
+                      }}
                     />
                   }
                 />
