@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
 import { useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import type { ColumnDef, Row } from '@tanstack/react-table'
 import {
   AlertTriangle,
@@ -589,6 +590,7 @@ export function BalanceCell({ channel }: { channel: Channel }) {
  */
 function ChannelStatusCell({ row }: { row: Row<Channel> }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const health = useContext(ChannelHealthContext)
   const layout = useContext(ChannelRowActionsLayoutContext)
   const status = row.getValue('status') as number
@@ -689,6 +691,18 @@ function ChannelStatusCell({ row }: { row: Row<Channel> }) {
   }
 
   const healthItem = health.byChannelId.get(channel.id)
+  const handleHealthBlockClick = (blockStartTs: number) => {
+    void navigate({
+      to: '/usage-logs/$section',
+      params: { section: 'common' },
+      search: {
+        page: 1,
+        channel: String(channel.id),
+        startTime: blockStartTs * 1000,
+        endTime: (blockStartTs + health.blockSeconds) * 1000 - 1,
+      },
+    })
+  }
 
   return (
     <div className='flex flex-col gap-1.5 py-2'>
@@ -702,6 +716,7 @@ function ChannelStatusCell({ row }: { row: Row<Channel> }) {
           blockCount={health.blockCount}
           blockSeconds={health.blockSeconds}
           startTs={health.startTs}
+          onBlockClick={handleHealthBlockClick}
         />
       )}
     </div>

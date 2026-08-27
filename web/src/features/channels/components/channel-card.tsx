@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import { flexRender, type Row } from '@tanstack/react-table'
 import { memo, useContext } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -49,6 +50,7 @@ function ChannelCardComponent({
   isSelected: boolean
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { sensitiveVisible } = useChannels()
   const health = useContext(ChannelHealthContext)
   const isTagRow = isTagAggregateRow(row.original)
@@ -91,6 +93,19 @@ function ChannelCardComponent({
     (row.original.status !== CHANNEL_STATUS.ENABLED &&
       row.original.status !== CHANNEL_STATUS.MANUAL_DISABLED)
 
+  const handleHealthBlockClick = (blockStartTs: number) => {
+    void navigate({
+      to: '/usage-logs/$section',
+      params: { section: 'common' },
+      search: {
+        page: 1,
+        channel: String(row.original.id),
+        startTime: blockStartTs * 1000,
+        endTime: (blockStartTs + health.blockSeconds) * 1000 - 1,
+      },
+    })
+  }
+
   return (
     <ChannelRowActionsLayoutContext.Provider value='card'>
       <div
@@ -126,6 +141,7 @@ function ChannelCardComponent({
               blockCount={health.blockCount}
               blockSeconds={health.blockSeconds}
               startTs={health.startTs}
+              onBlockClick={handleHealthBlockClick}
             />
           </div>
         )}

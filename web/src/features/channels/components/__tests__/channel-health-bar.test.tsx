@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
 import { ChannelHealthBar } from '../channel-health-bar'
 
@@ -60,5 +60,31 @@ describe('ChannelHealthBar', () => {
       expect(range?.parentElement).toHaveClass('space-y-0.5')
       expect(range?.parentElement?.children).toHaveLength(2)
     })
+  })
+
+  test('invokes the block click handler with the selected block start', async () => {
+    const user = userEvent.setup()
+    const onBlockClick = vi.fn()
+    const { container } = render(
+      <ChannelHealthBar
+        buckets={[
+          { success: 1, failed: 0 },
+          { success: 0, failed: 1 },
+        ]}
+        blockCount={2}
+        blockSeconds={600}
+        startTs={1_000}
+        onBlockClick={onBlockClick}
+      />
+    )
+
+    const secondBlock = container.querySelector('[data-health-block-index="1"]')
+    if (!secondBlock) {
+      throw new Error('second health block was not rendered')
+    }
+
+    await user.click(secondBlock)
+
+    expect(onBlockClick).toHaveBeenCalledWith(1_600)
   })
 })
