@@ -72,6 +72,42 @@ func TestMigrateRetiredFrontendOptionsMigratesValidValuesIdempotently(t *testing
 	assert.ElementsMatch(t, before, after)
 }
 
+func TestMigrateRetiredFrontendOptionsRenamesGPTRequestPolicy(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	legacy := []Option{
+		{Key: "global.codex2api.channel_tag", Value: "codex2api, sub2api"},
+		{Key: "global.codex2api.fast_policy", Value: "disabled"},
+		{Key: "global.codex2api.reasoning_policy", Value: "force_high"},
+	}
+	require.NoError(t, db.Create(&legacy).Error)
+
+	require.NoError(t, MigrateRetiredFrontendOptions())
+	assert.Equal(t, "codex2api, sub2api", requireOptionValue(t, db, "global.gpt_request_policy.tags"))
+	assert.Equal(t, "disabled", requireOptionValue(t, db, "global.gpt_request_policy.fast_policy"))
+	assert.Equal(t, "client", requireOptionValue(t, db, "global.gpt_request_policy.reasoning_policy"))
+	for _, option := range legacy {
+		requireOptionMissing(t, db, option.Key)
+	}
+	value, err := transformLegacyGPTFastPolicy("force")
+	require.NoError(t, err)
+	assert.Equal(t, "allow", value)
+}
+
+func TestMigrateRetiredFrontendOptionsNormalizesCurrentGPTRequestPolicy(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	options := []Option{
+		{Key: "global.gpt_request_policy.tags", Value: "  codex2api  "},
+		{Key: "global.gpt_request_policy.fast_policy", Value: " FORCE "},
+		{Key: "global.gpt_request_policy.reasoning_policy", Value: " FORCE_HIGH "},
+	}
+	require.NoError(t, db.Create(&options).Error)
+
+	require.NoError(t, MigrateRetiredFrontendOptions())
+	assert.Equal(t, "codex2api", requireOptionValue(t, db, "global.gpt_request_policy.tags"))
+	assert.Equal(t, "allow", requireOptionValue(t, db, "global.gpt_request_policy.fast_policy"))
+	assert.Equal(t, "client", requireOptionValue(t, db, "global.gpt_request_policy.reasoning_policy"))
+}
+
 func TestLegacyConsoleListMigrationCapsAPIInfoAndFAQ(t *testing.T) {
 	apiInfo := make([]map[string]any, 51)
 	faq := make([]map[string]any, 51)

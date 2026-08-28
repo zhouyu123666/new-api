@@ -26,6 +26,69 @@ const (
 
 var errSourceHeaderNotFound = errors.New("source header does not exist")
 
+// RemoveGPTServiceTier removes the GPT speed selector after all request
+// conversion and override rules have run when the global policy does not allow
+// forwarding it. The incoming value remains available on RelayInfo for usage
+// analytics.
+func RemoveGPTServiceTier(jsonData []byte) ([]byte, error) {
+	return sjson.DeleteBytes(jsonData, "service_tier")
+}
+
+// NormalizeGPTServiceTierValue converts the user-facing fast alias to the
+// service tier value accepted by OpenAI GPT backends. Other values are kept
+// unchanged so default/priority/flex behavior remains provider-controlled.
+func NormalizeGPTServiceTierValue(serviceTier string) string {
+	if strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
+		return "priority"
+	}
+	return serviceTier
+}
+
+// NormalizeGPTServiceTier rewrites the user-facing fast alias in a raw
+// request body after pass-through handling. It does not enable or disable the
+// field; callers decide that with RemoveGPTServiceTier.
+func NormalizeGPTServiceTier(jsonData []byte) ([]byte, error) {
+	value := gjson.GetBytes(jsonData, "service_tier")
+	if !value.Exists() || value.Type != gjson.String || !strings.EqualFold(value.String(), "fast") {
+		return jsonData, nil
+	}
+	return sjson.SetBytes(jsonData, "service_tier", "priority")
+}
+
+// CapGPTReasoningEffortAtHigh lowers client effort values above high in a
+// raw pass-through request while leaving absent, unknown, and lower values
+// unchanged.
+func CapGPTReasoningEffortAtHigh(jsonData []byte) ([]byte, error) {
+	value := gjson.GetBytes(jsonData, "reasoning.effort")
+	if !value.Exists() || value.Type != gjson.String {
+		return jsonData, nil
+	}
+
+	switch value.String() {
+	case "max", "xhigh":
+		return sjson.SetBytes(jsonData, "reasoning.effort", "high")
+	default:
+		return jsonData, nil
+	}
+}
+
+// The following names are retained for compatibility with existing callers.
+func RemoveCodexServiceTier(jsonData []byte) ([]byte, error) {
+	return RemoveGPTServiceTier(jsonData)
+}
+
+func NormalizeCodexServiceTierValue(serviceTier string) string {
+	return NormalizeGPTServiceTierValue(serviceTier)
+}
+
+func NormalizeCodexServiceTier(jsonData []byte) ([]byte, error) {
+	return NormalizeGPTServiceTier(jsonData)
+}
+
+func CapCodexReasoningEffortAtHigh(jsonData []byte) ([]byte, error) {
+	return CapGPTReasoningEffortAtHigh(jsonData)
+}
+
 var paramOverrideSensitivePathPrefixes = []string{
 	"model",
 	"original_model",

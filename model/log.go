@@ -70,6 +70,7 @@ type Log struct {
 	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
 	UseTime           int    `json:"use_time" gorm:"default:0"`
 	IsStream          bool   `json:"is_stream"`
+	FastMode          bool   `json:"fast_mode" gorm:"index"`
 	ChannelId         int    `json:"channel" gorm:"index"`
 	ChannelName       string `json:"channel_name" gorm:"->"`
 	TokenId           int    `json:"token_id" gorm:"default:0;index"`
@@ -336,6 +337,7 @@ type RecordConsumeLogParams struct {
 	TokenId          int                    `json:"token_id"`
 	UseTimeSeconds   int                    `json:"use_time_seconds"`
 	IsStream         bool                   `json:"is_stream"`
+	FastMode         bool                   `json:"fast_mode"`
 	Group            string                 `json:"group"`
 	Other            map[string]interface{} `json:"other"`
 }
@@ -372,6 +374,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		TokenId:          params.TokenId,
 		UseTime:          params.UseTimeSeconds,
 		IsStream:         params.IsStream,
+		FastMode:         params.FastMode,
 		Group:            params.Group,
 		Ip: func() string {
 			if needRecordIp {
@@ -610,26 +613,25 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 }
 
 type Stat struct {
-	Quota int `json:"quota"`
-	Rpm   int `json:"rpm"`
-	Tpm   int `json:"tpm"`
+	Quota     int     `json:"quota"`
+	Rpm       int     `json:"rpm"`
+	Tpm       int     `json:"tpm"`
+	Total     int64   `json:"total_count"`
+	Fast      int64   `json:"fast_count"`
+	FastRatio float64 `json:"fast_ratio"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
-
-	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
-
+func buildConsumeLogStatQuery(startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (*gorm.DB, error) {
+	tx := LOG_DB.Table("logs").Where("type = ?", LogTypeConsume)
+	var err error
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
-		return stat, err
+		return nil, err
 	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "username", username); err != nil {
-		return stat, err
+	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
+		return nil, err
 	}
 	if tokenName != "" {
 		tx = tx.Where("token_name = ?", tokenName)
-		rpmTpmQuery = rpmTpmQuery.Where("token_name = ?", tokenName)
 	}
 	if startTimestamp != 0 {
 		tx = tx.Where("created_at >= ?", startTimestamp)
@@ -637,23 +639,32 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if endTimestamp != 0 {
 		tx = tx.Where("created_at <= ?", endTimestamp)
 	}
-	if tx, err = applyExplicitLogTextFilter(tx, "model_name", modelName); err != nil {
-		return stat, err
-	}
-	if rpmTpmQuery, err = applyExplicitLogTextFilter(rpmTpmQuery, "model_name", modelName); err != nil {
-		return stat, err
-	}
 	if channel != 0 {
 		tx = tx.Where("channel_id = ?", channel)
-		rpmTpmQuery = rpmTpmQuery.Where("channel_id = ?", channel)
 	}
 	if group != "" {
 		tx = tx.Where(logGroupCol+" = ?", group)
-		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
+	return tx, nil
+}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+	baseQuery, err := buildConsumeLogStatQuery(startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	if err != nil {
+		return stat, err
+	}
+	// GORM chain methods may reuse the statement when a query is chained more
+	// than once. Clone the filtered base query before adding different SELECT or
+	// WHERE clauses so aggregate queries do not leak into the COUNT queries.
+	newStatQuery := func() *gorm.DB {
+		return baseQuery.Session(&gorm.Session{})
+	}
+	tx := newStatQuery().Select("COALESCE(sum(quota), 0) quota")
+
+	// 为rpm和tpm创建单独的查询
+	rpmTpmQuery := newStatQuery().Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	countQuery := newStatQuery()
+	fastQuery := newStatQuery().Where("fast_mode = ?", true)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -666,6 +677,17 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
+	}
+	if err := countQuery.Count(&stat.Total).Error; err != nil {
+		common.SysError("failed to query consume log count: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+	if err := fastQuery.Count(&stat.Fast).Error; err != nil {
+		common.SysError("failed to query fast consume log count: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+	if stat.Total > 0 {
+		stat.FastRatio = float64(stat.Fast) / float64(stat.Total)
 	}
 
 	return stat, nil

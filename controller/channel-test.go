@@ -505,6 +505,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		Content:          "模型测试",
 		UseTimeSeconds:   int(consumedTime),
 		IsStream:         info.IsStream,
+		FastMode:         info.FastMode,
 		Group:            info.UsingGroup,
 		Other:            other,
 	})

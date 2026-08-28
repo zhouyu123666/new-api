@@ -212,6 +212,12 @@ export const STATIC_I18N_KEYS = [
   // Models section-registry nav (dynamic titleKey)
   'Grok',
 
+  // GPT request parameter policy (dynamic labels)
+  'Disable fast',
+  'Allow client choice',
+  'Use client value',
+  'Cap at high',
+
   // Channel Affinity section
   'Channel Affinity',
 

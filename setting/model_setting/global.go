@@ -15,6 +15,22 @@ type ChatCompletionsToResponsesPolicy struct {
 	ModelPatterns []string `json:"model_patterns,omitempty"`
 }
 
+// GPT request policy values are kept in the global settings namespace so the
+// admin UI can manage GPT request parameters across GPT channels.
+type GPTRequestFastPolicy string
+
+const (
+	GPTRequestFastPolicyDisabled GPTRequestFastPolicy = "disabled"
+	GPTRequestFastPolicyAllow    GPTRequestFastPolicy = "allow"
+)
+
+type GPTRequestReasoningPolicy string
+
+const (
+	GPTRequestReasoningPolicyClient  GPTRequestReasoningPolicy = "client"
+	GPTRequestReasoningPolicyCapHigh GPTRequestReasoningPolicy = "cap_high"
+)
+
 func (p ChatCompletionsToResponsesPolicy) IsChannelEnabled(channelID int, channelType int) bool {
 	if !p.Enabled {
 		return false
@@ -36,6 +52,11 @@ type GlobalSettings struct {
 	PassThroughRequestEnabled        bool                             `json:"pass_through_request_enabled"`
 	ThinkingModelBlacklist           []string                         `json:"thinking_model_blacklist"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	// GPTRequestPolicyTags is retained for backwards-compatible option
+	// migration. GPT request policies now apply to every supported GPT channel.
+	GPTRequestPolicyTags      string                    `json:"gpt_request_policy.tags"`
+	GPTRequestFastPolicy      GPTRequestFastPolicy      `json:"gpt_request_policy.fast_policy"`
+	GPTRequestReasoningPolicy GPTRequestReasoningPolicy `json:"gpt_request_policy.reasoning_policy"`
 }
 
 // 默认配置
@@ -49,6 +70,9 @@ var defaultOpenaiSettings = GlobalSettings{
 		Enabled:     false,
 		AllChannels: true,
 	},
+	GPTRequestPolicyTags:      "codex2api",
+	GPTRequestFastPolicy:      GPTRequestFastPolicyDisabled,
+	GPTRequestReasoningPolicy: GPTRequestReasoningPolicyClient,
 }
 
 // 全局实例
@@ -61,6 +85,42 @@ func init() {
 
 func GetGlobalSettings() *GlobalSettings {
 	return &globalSettings
+}
+
+// MatchesGPTRequestPolicyTag is retained for compatibility with older callers.
+// It is no longer used to activate the global GPT request policies.
+func (s *GlobalSettings) MatchesGPTRequestPolicyTag(channelTag string) bool {
+	if s == nil {
+		return false
+	}
+
+	channelTag = strings.TrimSpace(channelTag)
+	if channelTag == "" {
+		return false
+	}
+
+	for _, configuredTag := range strings.Split(s.GPTRequestPolicyTags, ",") {
+		if strings.TrimSpace(configuredTag) == channelTag {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsGPTFast reports whether the global policy allows forwarding the fast
+// service tier for GPT requests. The legacy GPTRequestPolicyTags setting is
+// intentionally not consulted; it remains stored for backwards compatibility.
+// The optional tag argument is accepted for source compatibility and ignored.
+func (s *GlobalSettings) AllowsGPTFast(_ ...string) bool {
+	return s != nil && s.GPTRequestFastPolicy == GPTRequestFastPolicyAllow
+}
+
+// CapsGPTReasoningAtHigh reports whether reasoning effort above high should be
+// lowered for GPT requests. The legacy GPTRequestPolicyTags setting is
+// intentionally not consulted; it remains stored for backwards compatibility.
+// The optional tag argument is accepted for source compatibility and ignored.
+func (s *GlobalSettings) CapsGPTReasoningAtHigh(_ ...string) bool {
+	return s != nil && s.GPTRequestReasoningPolicy == GPTRequestReasoningPolicyCapHigh
 }
 
 // ShouldPreserveThinkingSuffix 判断模型是否配置为保留 thinking/-nothinking/-low/-high/-medium 后缀

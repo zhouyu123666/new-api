@@ -54,6 +54,17 @@ const MODELS_SECTIONS = [
               settings['global.chat_completions_to_responses_policy'],
               '{}'
             ),
+            gpt_request_policy: {
+              fast_policy:
+                settings['global.gpt_request_policy.fast_policy'] === 'allow'
+                  ? 'allow'
+                  : 'disabled',
+              reasoning_policy:
+                settings['global.gpt_request_policy.reasoning_policy'] ===
+                'cap_high'
+                  ? 'cap_high'
+                  : 'client',
+            },
           },
           general_setting: {
             ping_interval_enabled:

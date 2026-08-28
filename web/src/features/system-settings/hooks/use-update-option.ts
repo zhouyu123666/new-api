@@ -21,7 +21,10 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 
 import { updateSystemOption } from '../api'
-import type { UpdateOptionRequest } from '../types'
+import type {
+  SystemOptionsResponse,
+  UpdateOptionRequest,
+} from '../types'
 
 // Configuration keys that require status refresh
 const STATUS_RELATED_KEYS = new Set([
@@ -43,26 +46,50 @@ export function useUpdateOption() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: (request: UpdateOptionRequest) => updateSystemOption(request),
-    onSuccess: (data, variables) => {
-      if (data.success) {
-        // Always refresh system-options
-        queryClient.invalidateQueries({ queryKey: ['system-options'] })
+    mutationFn: async (request: UpdateOptionRequest) => {
+      const data = await updateSystemOption(request)
+      if (!data.success) {
+        throw new Error(data.message || i18next.t('Failed to update setting'))
+      }
+      return data
+    },
+    onSuccess: async (data, variables) => {
+      const savedOption = data.data ?? {
+        key: variables.key,
+        value: String(variables.value),
+      }
 
-        // If updating frontend-display-related config, also refresh status
-        if (STATUS_RELATED_KEYS.has(variables.key)) {
-          queryClient.invalidateQueries({ queryKey: ['status'] })
-          try {
-            window.localStorage.removeItem('status')
-          } catch {
-            /* empty */
+      // Keep the form and the server snapshot in sync immediately. The
+      // invalidation below still performs an authoritative read from the API.
+      queryClient.setQueryData<SystemOptionsResponse>(
+        ['system-options'],
+        (current) => {
+          if (!current?.data) return current
+          const found = current.data.some(
+            (option) => option.key === savedOption.key
+          )
+          if (!found) return current
+          return {
+            ...current,
+            data: current.data.map((option) =>
+              option.key === savedOption.key ? savedOption : option
+            ),
           }
         }
+      )
+      await queryClient.invalidateQueries({ queryKey: ['system-options'] })
 
-        toast.success(i18next.t('Setting updated successfully'))
-      } else {
-        toast.error(data.message || i18next.t('Failed to update setting'))
+      // If updating frontend-display-related config, also refresh status
+      if (STATUS_RELATED_KEYS.has(variables.key)) {
+        await queryClient.invalidateQueries({ queryKey: ['status'] })
+        try {
+          window.localStorage.removeItem('status')
+        } catch {
+          /* empty */
+        }
       }
+
+      toast.success(i18next.t('Setting updated successfully'))
     },
     onError: (error: Error) => {
       toast.error(error.message || i18next.t('Failed to update setting'))

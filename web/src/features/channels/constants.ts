@@ -395,7 +395,6 @@ export const MODEL_FETCHABLE_TYPES = new Set([
 export const FIELD_PASSTHROUGH_TYPES = new Set([
   1,
   14,
-  57,
   58,
   59,
   CHANNEL_TYPE_NEW_API,
@@ -403,7 +402,6 @@ export const FIELD_PASSTHROUGH_TYPES = new Set([
 
 export const OPENAI_FIELD_PASSTHROUGH_TYPES = new Set([
   1,
-  57,
   58,
   59,
   CHANNEL_TYPE_NEW_API,

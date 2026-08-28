@@ -58,6 +58,7 @@ type ResponsesUsageInfo struct {
 type ChannelMeta struct {
 	ChannelType          int
 	ChannelId            int
+	ChannelTag           string
 	ChannelIsMultiKey    bool
 	ChannelMultiKeyIndex int
 	ChannelBaseUrl       string
@@ -110,13 +111,17 @@ type RelayInfo struct {
 	IsFirstRequest         bool
 	AudioUsage             bool
 	ReasoningEffort        string
-	UserSetting            dto.UserSetting
-	UserEmail              string
-	UserQuota              int
-	RelayFormat            types.RelayFormat
-	SendResponseCount      int
-	ReceivedResponseCount  int
-	FinalPreConsumedQuota  int // 最终预消耗的配额
+	// FastMode records whether the incoming request explicitly requested the
+	// fast service tier. It is kept for usage analytics even when a channel
+	// filters the field before sending the upstream request.
+	FastMode              bool
+	UserSetting           dto.UserSetting
+	UserEmail             string
+	UserQuota             int
+	RelayFormat           types.RelayFormat
+	SendResponseCount     int
+	ReceivedResponseCount int
+	FinalPreConsumedQuota int // 最终预消耗的配额
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
 	// 必须在提交前锁定全额。
@@ -193,6 +198,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	channelMeta := &ChannelMeta{
 		ChannelType:          channelType,
 		ChannelId:            common.GetContextKeyInt(c, constant.ContextKeyChannelId),
+		ChannelTag:           common.GetContextKeyString(c, constant.ContextKeyChannelTag),
 		ChannelIsMultiKey:    common.GetContextKeyBool(c, constant.ContextKeyChannelIsMultiKey),
 		ChannelMultiKeyIndex: common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex),
 		ChannelBaseUrl:       common.GetContextKeyString(c, constant.ContextKeyChannelBaseUrl),
@@ -504,6 +510,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
+		FastMode:        requestUsesFastServiceTier(request),
 
 		RequestId:  reqId,
 		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -553,6 +560,28 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	}
 
 	return info
+}
+
+func requestUsesFastServiceTier(request dto.Request) bool {
+	if request == nil {
+		return false
+	}
+
+	var serviceTier string
+	switch r := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		if len(r.ServiceTier) > 0 {
+			_ = common.Unmarshal(r.ServiceTier, &serviceTier)
+		}
+	case *dto.OpenAIResponsesRequest:
+		serviceTier = r.ServiceTier
+	case *dto.OpenAIResponsesCompactionRequest:
+		serviceTier = r.ServiceTier
+	case *dto.ClaudeRequest:
+		serviceTier = r.ServiceTier
+	}
+
+	return strings.EqualFold(strings.TrimSpace(serviceTier), "fast")
 }
 
 func cloneRequestHeaders(c *gin.Context) map[string]string {

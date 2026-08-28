@@ -14,9 +14,9 @@ const retiredThemeOptionKey = "theme.frontend"
 
 type legacyOptionTransform func(string) (string, error)
 
-// MigrateRetiredFrontendOptions normalizes options that belonged to the
-// removed dashboard frontend. Each legacy console setting is migrated in its
-// own transaction so one malformed value cannot block the other settings.
+// MigrateRetiredFrontendOptions normalizes options that belonged to removed or
+// renamed frontend settings. Each legacy setting is migrated in its own
+// transaction so one malformed value cannot block the other settings.
 func MigrateRetiredFrontendOptions() error {
 	if DB == nil {
 		return errors.New("database is not initialized")
@@ -41,8 +41,124 @@ func MigrateRetiredFrontendOptions() error {
 			migrationErrors = append(migrationErrors, err)
 		}
 	}
+	if err := migrateLegacyGPTRequestPolicyOptions(); err != nil {
+		migrationErrors = append(migrationErrors, err)
+	}
+	if err := normalizeCurrentGPTRequestPolicyOptions(); err != nil {
+		migrationErrors = append(migrationErrors, err)
+	}
 	if err := migrateLegacyUptimeOptions(); err != nil {
 		migrationErrors = append(migrationErrors, err)
+	}
+	return errors.Join(migrationErrors...)
+}
+
+func migrateLegacyGPTRequestPolicyOptions() error {
+	migrations := []struct {
+		source    string
+		target    string
+		transform legacyOptionTransform
+	}{
+		{
+			source:    "global.codex2api.channel_tag",
+			target:    "global.gpt_request_policy.tags",
+			transform: transformLegacyGPTPolicyTags,
+		},
+		{
+			source:    "global.codex2api.fast_policy",
+			target:    "global.gpt_request_policy.fast_policy",
+			transform: transformLegacyGPTFastPolicy,
+		},
+		{
+			source:    "global.codex2api.reasoning_policy",
+			target:    "global.gpt_request_policy.reasoning_policy",
+			transform: transformLegacyGPTReasoningPolicy,
+		},
+	}
+
+	var migrationErrors []error
+	for _, migration := range migrations {
+		if err := migrateLegacyOption(migration.source, migration.target, migration.transform); err != nil {
+			migrationErrors = append(migrationErrors, err)
+		}
+	}
+	return errors.Join(migrationErrors...)
+}
+
+func transformLegacyGPTPolicyTags(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", errors.New("channel policy tags are empty")
+	}
+	return value, nil
+}
+
+func transformLegacyGPTFastPolicy(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "disabled", "allow":
+		return value, nil
+	case "force":
+		// Force fast is no longer supported. Keep the old setting usable by
+		// falling back to the non-forcing client-choice behavior.
+		return "allow", nil
+	default:
+		return "", fmt.Errorf("unsupported fast policy %q", value)
+	}
+}
+
+func transformLegacyGPTReasoningPolicy(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "client", "cap_high":
+		return value, nil
+	case "force_high":
+		// Force-high was removed. Following the client preserves existing
+		// requests without silently increasing their reasoning effort.
+		return "client", nil
+	default:
+		return "", fmt.Errorf("unsupported reasoning policy %q", value)
+	}
+}
+
+func normalizeCurrentGPTRequestPolicyOptions() error {
+	transforms := map[string]legacyOptionTransform{
+		"global.gpt_request_policy.tags": func(value string) (string, error) {
+			return strings.TrimSpace(value), nil
+		},
+		"global.gpt_request_policy.fast_policy": func(value string) (string, error) {
+			return transformLegacyGPTFastPolicy(strings.ToLower(strings.TrimSpace(value)))
+		},
+		"global.gpt_request_policy.reasoning_policy": func(value string) (string, error) {
+			return transformLegacyGPTReasoningPolicy(strings.ToLower(strings.TrimSpace(value)))
+		},
+	}
+
+	var migrationErrors []error
+	for key, transform := range transforms {
+		err := DB.Transaction(func(tx *gorm.DB) error {
+			var option Option
+			err := tx.Where(&Option{Key: key}).First(&option).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("read GPT request policy option %s: %w", key, err)
+			}
+
+			value, transformErr := transform(option.Value)
+			if transformErr != nil {
+				common.SysError(fmt.Sprintf("GPT request policy option %s was not normalized: %v", key, transformErr))
+				return nil
+			}
+			if value == option.Value {
+				return nil
+			}
+			return tx.Model(&option).Update("value", value).Error
+		})
+		if err != nil {
+			migrationErrors = append(migrationErrors, err)
+		}
 	}
 	return errors.Join(migrationErrors...)
 }

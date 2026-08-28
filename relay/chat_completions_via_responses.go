@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -76,7 +77,11 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	chatJSON, err = relaycommon.RemoveDisabledFields(chatJSON, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+	channelOtherSettings := info.ChannelOtherSettings
+	if relaycommon.ShouldForwardGPTServiceTier(info) {
+		channelOtherSettings.AllowServiceTier = true
+	}
+	chatJSON, err = relaycommon.RemoveDisabledFields(chatJSON, channelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
@@ -123,9 +128,18 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
 
-	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+	jsonData, err = relaycommon.RemoveDisabledFields(jsonData, channelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+	}
+	if relaycommon.IsGPTRequestPolicyChannel(info) {
+		jsonData, err = relaycommon.ApplyGPTRequestPolicyJSON(info, jsonData)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() && (info.GetReasoningEffort() == "max" || info.GetReasoningEffort() == "xhigh") {
+			info.SetReasoningEffort("high")
+		}
 	}
 
 	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)

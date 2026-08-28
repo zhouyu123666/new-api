@@ -253,6 +253,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		TokenId:          relayInfo.TokenId,
 		UseTimeSeconds:   int(useTimeSeconds),
 		IsStream:         relayInfo.IsStream,
+		FastMode:         relayInfo.FastMode,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
@@ -376,6 +377,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		TokenId:          relayInfo.TokenId,
 		UseTimeSeconds:   int(useTimeSeconds),
 		IsStream:         relayInfo.IsStream,
+		FastMode:         relayInfo.FastMode,
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
