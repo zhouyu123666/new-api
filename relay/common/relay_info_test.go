@@ -282,6 +282,12 @@ func TestGenRelayInfoCapturesFastServiceTier(t *testing.T) {
 			want:    true,
 		},
 		{
+			name:    "responses priority",
+			format:  types.RelayFormatOpenAIResponses,
+			request: &dto.OpenAIResponsesRequest{Model: "gpt-5.6-sol", ServiceTier: "priority"},
+			want:    true,
+		},
+		{
 			name:    "responses standard",
 			format:  types.RelayFormatOpenAIResponses,
 			request: &dto.OpenAIResponsesRequest{Model: "gpt-5.6-sol", ServiceTier: "standard"},
@@ -291,6 +297,12 @@ func TestGenRelayInfoCapturesFastServiceTier(t *testing.T) {
 			name:    "chat raw fast",
 			format:  types.RelayFormatOpenAI,
 			request: &dto.GeneralOpenAIRequest{Model: "gpt-5.6-sol", ServiceTier: json.RawMessage(`"fast"`)},
+			want:    true,
+		},
+		{
+			name:    "chat raw priority",
+			format:  types.RelayFormatOpenAI,
+			request: &dto.GeneralOpenAIRequest{Model: "gpt-5.6-sol", ServiceTier: json.RawMessage(`"priority"`)},
 			want:    true,
 		},
 		{

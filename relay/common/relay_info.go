@@ -581,7 +581,8 @@ func requestUsesFastServiceTier(request dto.Request) bool {
 		serviceTier = r.ServiceTier
 	}
 
-	return strings.EqualFold(strings.TrimSpace(serviceTier), "fast")
+	tier := strings.ToLower(strings.TrimSpace(serviceTier))
+	return tier == "fast" || tier == "priority"
 }
 
 func cloneRequestHeaders(c *gin.Context) map[string]string {
