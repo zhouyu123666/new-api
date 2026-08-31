@@ -61,8 +61,8 @@ const MODELS_SECTIONS = [
                   : 'disabled',
               reasoning_policy:
                 settings['global.gpt_request_policy.reasoning_policy'] ===
-                'cap_high'
-                  ? 'cap_high'
+                'cap_xhigh'
+                  ? settings['global.gpt_request_policy.reasoning_policy']
                   : 'client',
             },
           },

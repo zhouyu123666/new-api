@@ -217,7 +217,7 @@ func validateOptionValue(key string, value string) error {
 			return fmt.Errorf("invalid GPT fast service tier policy: %s", value)
 		}
 	case "global.gpt_request_policy.reasoning_policy":
-		if value != "client" && value != "cap_high" {
+		if value != "client" && value != "cap_xhigh" {
 			return fmt.Errorf("invalid GPT reasoning policy: %s", value)
 		}
 	}

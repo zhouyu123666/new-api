@@ -216,7 +216,7 @@ export const STATIC_I18N_KEYS = [
   'Disable fast',
   'Allow client choice',
   'Use client value',
-  'Cap at high',
+  'Cap at xhigh',
 
   // Channel Affinity section
   'Channel Affinity',

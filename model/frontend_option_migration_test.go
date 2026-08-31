@@ -108,6 +108,17 @@ func TestMigrateRetiredFrontendOptionsNormalizesCurrentGPTRequestPolicy(t *testi
 	assert.Equal(t, "client", requireOptionValue(t, db, "global.gpt_request_policy.reasoning_policy"))
 }
 
+func TestMigrateRetiredFrontendOptionsReplacesHighReasoningCap(t *testing.T) {
+	db := useFrontendOptionMigrationDB(t)
+	require.NoError(t, db.Create(&Option{
+		Key:   "global.gpt_request_policy.reasoning_policy",
+		Value: "cap_high",
+	}).Error)
+
+	require.NoError(t, MigrateRetiredFrontendOptions())
+	assert.Equal(t, "cap_xhigh", requireOptionValue(t, db, "global.gpt_request_policy.reasoning_policy"))
+}
+
 func TestLegacyConsoleListMigrationCapsAPIInfoAndFAQ(t *testing.T) {
 	apiInfo := make([]map[string]any, 51)
 	faq := make([]map[string]any, 51)

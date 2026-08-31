@@ -15,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -137,9 +136,7 @@ func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, ad
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
-		if model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() && (info.GetReasoningEffort() == "max" || info.GetReasoningEffort() == "xhigh") {
-			info.SetReasoningEffort("high")
-		}
+		relaycommon.ApplyGPTReasoningEffortCap(info)
 	}
 
 	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)

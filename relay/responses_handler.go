@@ -92,9 +92,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
-			if model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() && (info.GetReasoningEffort() == "max" || info.GetReasoningEffort() == "xhigh") {
-				info.SetReasoningEffort("high")
-			}
+			relaycommon.ApplyGPTReasoningEffortCap(info)
 			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
@@ -141,9 +139,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
-			if model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() && (info.GetReasoningEffort() == "max" || info.GetReasoningEffort() == "xhigh") {
-				info.SetReasoningEffort("high")
-			}
+			relaycommon.ApplyGPTReasoningEffortCap(info)
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)

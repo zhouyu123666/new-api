@@ -27,8 +27,9 @@ const (
 type GPTRequestReasoningPolicy string
 
 const (
-	GPTRequestReasoningPolicyClient  GPTRequestReasoningPolicy = "client"
-	GPTRequestReasoningPolicyCapHigh GPTRequestReasoningPolicy = "cap_high"
+	GPTRequestReasoningPolicyClient   GPTRequestReasoningPolicy = "client"
+	GPTRequestReasoningPolicyCapHigh  GPTRequestReasoningPolicy = "cap_high"
+	GPTRequestReasoningPolicyCapXHigh GPTRequestReasoningPolicy = "cap_xhigh"
 )
 
 func (p ChatCompletionsToResponsesPolicy) IsChannelEnabled(channelID int, channelType int) bool {
@@ -115,12 +116,28 @@ func (s *GlobalSettings) AllowsGPTFast(_ ...string) bool {
 	return s != nil && s.GPTRequestFastPolicy == GPTRequestFastPolicyAllow
 }
 
+// GPTReasoningEffortCap returns the configured maximum reasoning effort for
+// GPT requests. An empty result means client values are preserved.
+func (s *GlobalSettings) GPTReasoningEffortCap(_ ...string) string {
+	if s == nil {
+		return ""
+	}
+	switch s.GPTRequestReasoningPolicy {
+	case GPTRequestReasoningPolicyCapHigh:
+		return "high"
+	case GPTRequestReasoningPolicyCapXHigh:
+		return "xhigh"
+	default:
+		return ""
+	}
+}
+
 // CapsGPTReasoningAtHigh reports whether reasoning effort above high should be
 // lowered for GPT requests. The legacy GPTRequestPolicyTags setting is
 // intentionally not consulted; it remains stored for backwards compatibility.
 // The optional tag argument is accepted for source compatibility and ignored.
 func (s *GlobalSettings) CapsGPTReasoningAtHigh(_ ...string) bool {
-	return s != nil && s.GPTRequestReasoningPolicy == GPTRequestReasoningPolicyCapHigh
+	return s.GPTReasoningEffortCap() == "high"
 }
 
 // ShouldPreserveThinkingSuffix 判断模型是否配置为保留 thinking/-nothinking/-low/-high/-medium 后缀

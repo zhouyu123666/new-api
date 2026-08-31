@@ -15,6 +15,14 @@ func TestGlobalSettingsGPTRequestPolicyAppliesWithoutChannelTags(t *testing.T) {
 
 	settings.GPTRequestReasoningPolicy = GPTRequestReasoningPolicyCapHigh
 	assert.True(t, settings.CapsGPTReasoningAtHigh())
+	assert.Equal(t, "high", settings.GPTReasoningEffortCap())
+
+	settings.GPTRequestReasoningPolicy = GPTRequestReasoningPolicyCapXHigh
+	assert.False(t, settings.CapsGPTReasoningAtHigh())
+	assert.Equal(t, "xhigh", settings.GPTReasoningEffortCap())
+
+	settings.GPTRequestReasoningPolicy = GPTRequestReasoningPolicyClient
+	assert.Empty(t, settings.GPTReasoningEffortCap())
 }
 
 func TestGlobalSettingsGPTRequestPolicyDisabledDoesNotAllowFast(t *testing.T) {

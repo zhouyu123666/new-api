@@ -737,6 +737,7 @@
     "Cancelled": "Đã hủy",
     "Cancelled at": "Đã hủy lúc",
     "Cap at high": "Giới hạn ở high",
+    "Cap at xhigh": "Giới hạn ở xhigh",
     "Capabilities": "Khả năng",
     "Caps the response length": "Giới hạn độ dài phản hồi",
     "Capture a reusable bundle of models, tags, or endpoints.": "Đóng gói một bộ có thể tái sử dụng gồm các mô hình, thẻ hoặc điểm cuối.",
@@ -843,8 +844,10 @@
     "Choose the bundle type and define the items inside it.": "Chọn loại gói và định nghĩa các mục bên trong nó.",
     "Choose the default charts, range, and time granularity for model analytics.": "Chọn biểu đồ, khoảng thời gian và độ chi tiết thời gian mặc định cho phân tích mô hình.",
     "Choose where to fetch upstream metadata.": "Chọn nơi để tìm nạp siêu dữ liệu thượng nguồn.",
+    "Choose whether fast is removed or passed through for GPT requests.": "Chọn xóa fast hoặc chuyển tiếp fast cho các yêu cầu GPT.",
     "Choose whether fast is removed or passed through for matching GPT requests.": "Chọn xóa hoặc truyền nguyên fast cho các yêu cầu GPT khớp.",
     "Choose whether GPT requests keep the client value or cap reasoning effort at high.": "Chọn giữ giá trị máy khách hoặc giới hạn cường độ suy luận ở high cho các yêu cầu GPT.",
+    "Choose whether GPT requests keep the client value or cap reasoning effort at the configured maximum.": "Chọn giữ giá trị của máy khách cho yêu cầu GPT hoặc giới hạn mức độ suy luận ở mức tối đa đã cấu hình.",
     "Choose which charts are selected by default when opening model analytics.": "Chọn biểu đồ được chọn mặc định khi mở phân tích mô hình.",
     "Clamped to": "Giới hạn thành",
     "Claude": "Claude",
@@ -4616,6 +4619,7 @@
     "Theme Settings": "Cài đặt chủ đề",
     "There are both add and remove models pending, but you only selected one type. Confirm submitting only the selected items?": "Có cả mô hình cần thêm và xóa đang chờ, nhưng bạn chỉ chọn một loại. Xác nhận chỉ gửi các mục đã chọn?",
     "There is a rule for vip billed as premium → use its ratio 0.3": "Có quy tắc «vip theo premium» → dùng hệ số 0.3 của quy tắc",
+    "These controls apply to all GPT requests sent through supported GPT channels.": "Các tùy chọn này áp dụng cho mọi yêu cầu GPT được gửi qua các kênh GPT được hỗ trợ.",
     "These controls apply to GPT requests sent through channels whose tags match any configured tag. Individual channel overrides can be added later.": "Các tùy chọn này áp dụng cho yêu cầu GPT gửi qua những kênh có thẻ khớp với giá trị đã cấu hình. Có thể thêm ghi đè cho từng kênh sau.",
     "These models are still in your selection but were not returned by the upstream listing. Entries that are only model_mapping source aliases are omitted. Toggle to adjust before saving.": "Các model này vẫn được chọn nhưng không còn xuất hiện trong danh sách upstream; tên chỉ là khóa nguồn trong model_mapping đã được loại. Điều chỉnh trước khi lưu.",
     "These toggles affect whether certain request fields are passed through to the upstream provider.": "Các chuyển đổi này ảnh hưởng đến việc các trường yêu cầu nhất định có được chuyển đến nhà cung cấp dịch vụ đầu vào hay không.",
@@ -5334,8 +5338,6 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "These controls apply to all GPT requests sent through supported GPT channels.": "Các tùy chọn này áp dụng cho mọi yêu cầu GPT được gửi qua các kênh GPT được hỗ trợ.",
-    "Choose whether fast is removed or passed through for GPT requests.": "Chọn xóa fast hoặc chuyển tiếp fast cho các yêu cầu GPT."
+    "Zoom": "Zoom"
   }
 }

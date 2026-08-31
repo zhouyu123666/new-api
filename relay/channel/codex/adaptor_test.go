@@ -109,3 +109,27 @@ func TestConvertOpenAIResponsesRequestCapsReasoningAtHigh(t *testing.T) {
 	require.NotNil(t, request.Reasoning)
 	assert.Equal(t, "high", request.Reasoning.Effort)
 }
+
+func TestConvertOpenAIResponsesRequestCapsReasoningAtXHigh(t *testing.T) {
+	settings := model_setting.GetGlobalSettings()
+	originalPolicy := settings.GPTRequestReasoningPolicy
+	t.Cleanup(func() {
+		settings.GPTRequestReasoningPolicy = originalPolicy
+	})
+	settings.GPTRequestReasoningPolicy = model_setting.GPTRequestReasoningPolicyCapXHigh
+
+	adaptor := &Adaptor{}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+		ChannelType: constant.ChannelTypeCodex,
+	}}
+	converted, err := adaptor.ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model:     "gpt-5.5",
+		Reasoning: &dto.Reasoning{Effort: "max"},
+	})
+	require.NoError(t, err)
+
+	request, ok := converted.(dto.OpenAIResponsesRequest)
+	require.True(t, ok)
+	require.NotNil(t, request.Reasoning)
+	assert.Equal(t, "xhigh", request.Reasoning.Effort)
+}

@@ -16,6 +16,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCapGPTReasoningEffortValueSupportsXHighCap(t *testing.T) {
+	assert.Equal(t, "xhigh", CapGPTReasoningEffortValue("max", "xhigh"))
+	assert.Equal(t, "xhigh", CapGPTReasoningEffortValue("xhigh", "xhigh"))
+	assert.Equal(t, "high", CapGPTReasoningEffortValue("high", "xhigh"))
+}
+
+func TestCapGPTReasoningEffortSupportsXHighCap(t *testing.T) {
+	out, err := CapGPTReasoningEffort([]byte(`{"reasoning":{"effort":"max"}}`), "xhigh")
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"reasoning":{"effort":"xhigh"}}`, string(out))
+}
+
 func TestApplyParamOverrideTrimPrefix(t *testing.T) {
 	// trim_prefix example:
 	// {"operations":[{"path":"model","mode":"trim_prefix","value":"openai/"}]}

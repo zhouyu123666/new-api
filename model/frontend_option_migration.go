@@ -110,8 +110,11 @@ func transformLegacyGPTFastPolicy(value string) (string, error) {
 func transformLegacyGPTReasoningPolicy(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	switch value {
-	case "client", "cap_high":
+	case "client", "cap_xhigh":
 		return value, nil
+	case "cap_high":
+		// The former high cap is replaced by the single xhigh cap option.
+		return "cap_xhigh", nil
 	case "force_high":
 		// Force-high was removed. Following the client preserves existing
 		// requests without silently increasing their reasoning effort.

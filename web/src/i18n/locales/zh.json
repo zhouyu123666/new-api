@@ -737,6 +737,7 @@
     "Cancelled": "已取消",
     "Cancelled at": "作废于",
     "Cap at high": "最高限制为 high",
+    "Cap at xhigh": "最高限制为 xhigh",
     "Capabilities": "能力",
     "Caps the response length": "限制回复长度",
     "Capture a reusable bundle of models, tags, or endpoints.": "捕获可重用的模型、标签或端点捆绑包。",
@@ -843,8 +844,10 @@
     "Choose the bundle type and define the items inside it.": "选择捆绑包类型并定义其中的项目。",
     "Choose the default charts, range, and time granularity for model analytics.": "选择模型调用分析的默认图表、范围和时间粒度。",
     "Choose where to fetch upstream metadata.": "选择从何处获取上游元数据。",
+    "Choose whether fast is removed or passed through for GPT requests.": "选择是否移除 fast，或将其传递给 GPT 请求。",
     "Choose whether fast is removed or passed through for matching GPT requests.": "选择匹配的 GPT 请求如何处理 fast：移除或透传。",
     "Choose whether GPT requests keep the client value or cap reasoning effort at high.": "选择 GPT 请求跟随客户端值，或将推理强度上限限制为 high。",
+    "Choose whether GPT requests keep the client value or cap reasoning effort at the configured maximum.": "选择 GPT 请求保留客户端值，还是限制为配置的最高推理强度。",
     "Choose which charts are selected by default when opening model analytics.": "选择打开模型调用分析时默认选中的图表。",
     "Clamped to": "钳制为",
     "Claude": "Claude",
@@ -4616,6 +4619,7 @@
     "Theme Settings": "主题设置",
     "There are both add and remove models pending, but you only selected one type. Confirm submitting only the selected items?": "当前有新增和删除两类待处理模型，但您只勾选了其中一类。确认仅提交已勾选的部分吗？",
     "There is a rule for vip billed as premium → use its ratio 0.3": "存在「vip 按 premium 计费」的规则 → 用规则里的 0.3",
+    "These controls apply to all GPT requests sent through supported GPT channels.": "这些控制项会应用于所有通过受支持 GPT 渠道发送的请求。",
     "These controls apply to GPT requests sent through channels whose tags match any configured tag. Individual channel overrides can be added later.": "这些控制项会应用于通过标签匹配渠道发送的 GPT 请求，后续可以增加单个渠道的覆盖设置。",
     "These models are still in your selection but were not returned by the upstream listing. Entries that are only model_mapping source aliases are omitted. Toggle to adjust before saving.": "这些模型仍然在您的勾选列表中，但上游已不再返回该名称；仅作为 model_mapping 来源键而不会出现在 upstream 列表的别名已从本视图排除，请在保存前调整勾选。",
     "These toggles affect whether certain request fields are passed through to the upstream provider.": "这些开关控制某些请求字段是否透传到上游服务。",
@@ -5334,8 +5338,6 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放",
-    "These controls apply to all GPT requests sent through supported GPT channels.": "这些控制项会应用于所有通过受支持 GPT 渠道发送的请求。",
-    "Choose whether fast is removed or passed through for GPT requests.": "选择是否移除 fast，或将其传递给 GPT 请求。"
+    "Zoom": "缩放"
   }
 }

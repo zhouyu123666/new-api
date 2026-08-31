@@ -97,6 +97,11 @@ func TestApplyGPTRequestPolicyJSONSupportsResponsesAndChatShapes(t *testing.T) {
 	out, err := ApplyGPTRequestPolicyJSON(info, []byte(`{"service_tier":"fast","reasoning":{"effort":"xhigh"},"reasoning_effort":"max"}`))
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"service_tier":"priority","reasoning":{"effort":"high"},"reasoning_effort":"high"}`, string(out))
+
+	settings.GPTRequestReasoningPolicy = model_setting.GPTRequestReasoningPolicyCapXHigh
+	out, err = ApplyGPTRequestPolicyJSON(info, []byte(`{"reasoning":{"effort":"max"},"reasoning_effort":"max"}`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"reasoning":{"effort":"xhigh"},"reasoning_effort":"xhigh"}`, string(out))
 }
 
 func TestApplyCodexReasoningPolicyCapsOnlyAboveHigh(t *testing.T) {
@@ -116,6 +121,29 @@ func TestApplyCodexReasoningPolicyCapsOnlyAboveHigh(t *testing.T) {
 		{input: "xhigh", want: "high"},
 		{input: "high", want: "high"},
 		{input: "medium", want: "medium"},
+	} {
+		reasoning := &dto.Reasoning{Effort: tt.input}
+		ApplyCodexReasoningPolicy(info, reasoning)
+		assert.Equal(t, tt.want, reasoning.Effort)
+	}
+}
+
+func TestApplyCodexReasoningPolicyCapsAtXHigh(t *testing.T) {
+	settings := model_setting.GetGlobalSettings()
+	originalPolicy := settings.GPTRequestReasoningPolicy
+	t.Cleanup(func() {
+		settings.GPTRequestReasoningPolicy = originalPolicy
+	})
+	settings.GPTRequestReasoningPolicy = model_setting.GPTRequestReasoningPolicyCapXHigh
+
+	info := &RelayInfo{ChannelMeta: &ChannelMeta{ChannelType: constant.ChannelTypeCodex}}
+	for _, tt := range []struct {
+		input string
+		want  string
+	}{
+		{input: "max", want: "xhigh"},
+		{input: "xhigh", want: "xhigh"},
+		{input: "high", want: "high"},
 	} {
 		reasoning := &dto.Reasoning{Effort: tt.input}
 		ApplyCodexReasoningPolicy(info, reasoning)

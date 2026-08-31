@@ -27,20 +27,20 @@ func ShouldForwardGPTServiceTier(info *RelayInfo) bool {
 	return model_setting.GetGlobalSettings().AllowsGPTFast()
 }
 
-// ApplyGPTReasoningPolicy caps only effort values above high. Missing,
+// ApplyGPTReasoningPolicy applies the configured reasoning effort cap. Missing,
 // unknown, and lower effort values remain client-controlled.
 func ApplyGPTReasoningPolicy(info *RelayInfo, reasoning *dto.Reasoning) {
 	if !IsGPTRequestPolicyChannel(info) || reasoning == nil {
 		return
 	}
-	if !model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() {
+	cap := model_setting.GetGlobalSettings().GPTReasoningEffortCap()
+	if cap == "" {
 		return
 	}
 
-	switch reasoning.Effort {
-	case "max", "xhigh":
-		reasoning.Effort = "high"
-		info.SetReasoningEffort("high")
+	if capped := CapGPTReasoningEffortValue(reasoning.Effort, cap); capped != reasoning.Effort {
+		reasoning.Effort = capped
+		info.SetReasoningEffort(capped)
 	}
 }
 
@@ -60,15 +60,16 @@ func ApplyGPTChatRequestPolicy(info *RelayInfo, request *dto.GeneralOpenAIReques
 		}
 	}
 
-	if !model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() {
+	cap := model_setting.GetGlobalSettings().GPTReasoningEffortCap()
+	if cap == "" {
 		return
 	}
-	if request.ReasoningEffort == "max" || request.ReasoningEffort == "xhigh" {
-		request.ReasoningEffort = "high"
-		info.SetReasoningEffort("high")
+	if capped := CapGPTReasoningEffortValue(request.ReasoningEffort, cap); capped != request.ReasoningEffort {
+		request.ReasoningEffort = capped
+		info.SetReasoningEffort(capped)
 	}
 	if len(request.Reasoning) > 0 {
-		if capped, err := CapGPTReasoningEffortAtHigh(request.Reasoning); err == nil {
+		if capped, err := CapGPTReasoningEffort(request.Reasoning, cap); err == nil {
 			request.Reasoning = capped
 		}
 	}
@@ -91,20 +92,36 @@ func ApplyGPTRequestPolicyJSON(info *RelayInfo, jsonData []byte) ([]byte, error)
 	if err != nil {
 		return nil, err
 	}
-	if !model_setting.GetGlobalSettings().CapsGPTReasoningAtHigh() {
+	cap := model_setting.GetGlobalSettings().GPTReasoningEffortCap()
+	if cap == "" {
 		return jsonData, nil
 	}
-	jsonData, err = CapGPTReasoningEffortAtHigh(jsonData)
+	jsonData, err = CapGPTReasoningEffort(jsonData, cap)
 	if err != nil {
 		return nil, err
 	}
 	if value := gjson.GetBytes(jsonData, "reasoning_effort"); value.Exists() && value.Type == gjson.String {
-		switch value.String() {
-		case "max", "xhigh":
-			jsonData, err = sjson.SetBytes(jsonData, "reasoning_effort", "high")
+		capped := CapGPTReasoningEffortValue(value.String(), cap)
+		if capped != value.String() {
+			jsonData, err = sjson.SetBytes(jsonData, "reasoning_effort", capped)
 		}
 	}
 	return jsonData, err
+}
+
+// ApplyGPTReasoningEffortCap keeps RelayInfo aligned with a rewritten request
+// body so billing and usage logs reflect the effort sent upstream.
+func ApplyGPTReasoningEffortCap(info *RelayInfo) {
+	if !IsGPTRequestPolicyChannel(info) {
+		return
+	}
+	cap := model_setting.GetGlobalSettings().GPTReasoningEffortCap()
+	if cap == "" {
+		return
+	}
+	if capped := CapGPTReasoningEffortValue(info.GetReasoningEffort(), cap); capped != info.GetReasoningEffort() {
+		info.SetReasoningEffort(capped)
+	}
 }
 
 // Compatibility wrappers for the former Codex-specific helper names.

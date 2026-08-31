@@ -18,6 +18,7 @@ func TestValidateGPTRequestPolicyOptionValues(t *testing.T) {
 	}{
 		{name: "fast policy", key: "global.gpt_request_policy.fast_policy", value: "invalid"},
 		{name: "reasoning policy", key: "global.gpt_request_policy.reasoning_policy", value: "force_high"},
+		{name: "retired high reasoning policy", key: "global.gpt_request_policy.reasoning_policy", value: "cap_high"},
 		{name: "tags too long", key: "global.gpt_request_policy.tags", value: strings.Repeat("x", 513)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -28,6 +29,7 @@ func TestValidateGPTRequestPolicyOptionValues(t *testing.T) {
 	require.NoError(t, validateOptionValue("global.gpt_request_policy.tags", ""))
 	require.NoError(t, validateOptionValue("global.gpt_request_policy.fast_policy", "allow"))
 	require.NoError(t, validateOptionValue("global.gpt_request_policy.reasoning_policy", "client"))
+	require.NoError(t, validateOptionValue("global.gpt_request_policy.reasoning_policy", "cap_xhigh"))
 }
 
 func TestNormalizeGPTRequestPolicyOptionValues(t *testing.T) {
@@ -37,6 +39,8 @@ func TestNormalizeGPTRequestPolicyOptionValues(t *testing.T) {
 		"global.gpt_request_policy.fast_policy", " ALLOW "))
 	assert.Equal(t, "cap_high", normalizeOptionValue(
 		"global.gpt_request_policy.reasoning_policy", " CAP_HIGH "))
+	assert.Equal(t, "cap_xhigh", normalizeOptionValue(
+		"global.gpt_request_policy.reasoning_policy", " CAP_XHIGH "))
 }
 
 func TestUpdateOptionPersistsNormalizedGPTRequestPolicyValue(t *testing.T) {

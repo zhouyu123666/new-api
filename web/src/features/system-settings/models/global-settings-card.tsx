@@ -91,7 +91,7 @@ const gptRequestFastPolicyOptions = [
 
 const gptRequestReasoningPolicyOptions = [
   { value: 'client', label: 'Use client value' },
-  { value: 'cap_high', label: 'Cap at high' },
+  { value: 'cap_xhigh', label: 'Cap at xhigh' },
 ] as const
 
 const jsonString = z.string().refine((value) => {
@@ -112,7 +112,7 @@ const schema = z.object({
     chat_completions_to_responses_policy: jsonString,
     gpt_request_policy: z.object({
       fast_policy: z.enum(['disabled', 'allow']),
-      reasoning_policy: z.enum(['client', 'cap_high']),
+      reasoning_policy: z.enum(['client', 'cap_xhigh']),
     }),
   }),
   general_setting: z.object({
@@ -129,7 +129,7 @@ type FlatGlobalModelSettings = {
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
   'global.gpt_request_policy.fast_policy': 'disabled' | 'allow'
-  'global.gpt_request_policy.reasoning_policy': 'client' | 'cap_high'
+  'global.gpt_request_policy.reasoning_policy': 'client' | 'cap_xhigh'
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
 }
@@ -349,7 +349,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     </Select>
                     <FormDescription>
                       {t(
-                        'Choose whether GPT requests keep the client value or cap reasoning effort at high.'
+                        'Choose whether GPT requests keep the client value or cap reasoning effort at the configured maximum.'
                       )}
                     </FormDescription>
                     <FormMessage />

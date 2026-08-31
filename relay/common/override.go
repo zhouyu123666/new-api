@@ -55,21 +55,41 @@ func NormalizeGPTServiceTier(jsonData []byte) ([]byte, error) {
 	return sjson.SetBytes(jsonData, "service_tier", "priority")
 }
 
-// CapGPTReasoningEffortAtHigh lowers client effort values above high in a
-// raw pass-through request while leaving absent, unknown, and lower values
-// unchanged.
-func CapGPTReasoningEffortAtHigh(jsonData []byte) ([]byte, error) {
+// CapGPTReasoningEffortValue lowers a client effort value to the configured
+// cap while leaving absent, unknown, and lower values unchanged.
+func CapGPTReasoningEffortValue(effort string, cap string) string {
+	switch strings.ToLower(strings.TrimSpace(cap)) {
+	case "high":
+		if strings.EqualFold(strings.TrimSpace(effort), "max") || strings.EqualFold(strings.TrimSpace(effort), "xhigh") {
+			return "high"
+		}
+	case "xhigh":
+		if strings.EqualFold(strings.TrimSpace(effort), "max") {
+			return "xhigh"
+		}
+	}
+	return effort
+}
+
+// CapGPTReasoningEffort lowers client effort values above the configured cap
+// in a raw pass-through request.
+func CapGPTReasoningEffort(jsonData []byte, cap string) ([]byte, error) {
 	value := gjson.GetBytes(jsonData, "reasoning.effort")
 	if !value.Exists() || value.Type != gjson.String {
 		return jsonData, nil
 	}
 
-	switch value.String() {
-	case "max", "xhigh":
-		return sjson.SetBytes(jsonData, "reasoning.effort", "high")
-	default:
+	capped := CapGPTReasoningEffortValue(value.String(), cap)
+	if capped == value.String() {
 		return jsonData, nil
 	}
+	return sjson.SetBytes(jsonData, "reasoning.effort", capped)
+}
+
+// CapGPTReasoningEffortAtHigh preserves the historical helper name for
+// callers that specifically need a high cap.
+func CapGPTReasoningEffortAtHigh(jsonData []byte) ([]byte, error) {
+	return CapGPTReasoningEffort(jsonData, "high")
 }
 
 // The following names are retained for compatibility with existing callers.

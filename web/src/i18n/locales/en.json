@@ -737,6 +737,7 @@
     "Cancelled": "Cancelled",
     "Cancelled at": "Cancelled at",
     "Cap at high": "Cap at high",
+    "Cap at xhigh": "Cap at xhigh",
     "Capabilities": "Capabilities",
     "Caps the response length": "Caps the response length",
     "Capture a reusable bundle of models, tags, or endpoints.": "Capture a reusable bundle of models, tags, or endpoints.",
@@ -843,8 +844,10 @@
     "Choose the bundle type and define the items inside it.": "Choose the bundle type and define the items inside it.",
     "Choose the default charts, range, and time granularity for model analytics.": "Choose the default charts, range, and time granularity for model analytics.",
     "Choose where to fetch upstream metadata.": "Choose where to fetch upstream metadata.",
+    "Choose whether fast is removed or passed through for GPT requests.": "Choose whether fast is removed or passed through for GPT requests.",
     "Choose whether fast is removed or passed through for matching GPT requests.": "Choose whether fast is removed or passed through for matching GPT requests.",
     "Choose whether GPT requests keep the client value or cap reasoning effort at high.": "Choose whether GPT requests keep the client value or cap reasoning effort at high.",
+    "Choose whether GPT requests keep the client value or cap reasoning effort at the configured maximum.": "Choose whether GPT requests keep the client value or cap reasoning effort at the configured maximum.",
     "Choose which charts are selected by default when opening model analytics.": "Choose which charts are selected by default when opening model analytics.",
     "Clamped to": "Clamped to",
     "Claude": "Claude",
@@ -4616,6 +4619,7 @@
     "Theme Settings": "Theme Settings",
     "There are both add and remove models pending, but you only selected one type. Confirm submitting only the selected items?": "There are both add and remove models pending, but you only selected one type. Confirm submitting only the selected items?",
     "There is a rule for vip billed as premium → use its ratio 0.3": "There is a rule for vip billed as premium → use its ratio 0.3",
+    "These controls apply to all GPT requests sent through supported GPT channels.": "These controls apply to all GPT requests sent through supported GPT channels.",
     "These controls apply to GPT requests sent through channels whose tags match any configured tag. Individual channel overrides can be added later.": "These controls apply to GPT requests sent through channels whose tags match any configured tag. Individual channel overrides can be added later.",
     "These models are still in your selection but were not returned by the upstream listing. Entries that are only model_mapping source aliases are omitted. Toggle to adjust before saving.": "These models are still in your selection but were not returned by the upstream listing. Entries that are only model_mapping source aliases are omitted. Toggle to adjust before saving.",
     "These toggles affect whether certain request fields are passed through to the upstream provider.": "These toggles affect whether certain request fields are passed through to the upstream provider.",
@@ -5334,8 +5338,6 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom",
-    "These controls apply to all GPT requests sent through supported GPT channels.": "These controls apply to all GPT requests sent through supported GPT channels.",
-    "Choose whether fast is removed or passed through for GPT requests.": "Choose whether fast is removed or passed through for GPT requests."
+    "Zoom": "Zoom"
   }
 }
