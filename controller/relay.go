@@ -15,6 +15,8 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/observability"
+	channelmetrics "github.com/QuantumNous/new-api/pkg/channel_metrics"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -31,6 +33,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func relayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
@@ -125,6 +129,20 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	otelRuntime := observability.FromContext(c.Request.Context())
+	traceCtx := c.Request.Context()
+	var llmSpan trace.Span
+	if otelRuntime != nil {
+		traceCtx, llmSpan = otelRuntime.StartLLMRequest(traceCtx, relayInfo, request)
+		c.Request = c.Request.WithContext(traceCtx)
+		defer func() {
+			if newAPIError == nil {
+				otelRuntime.FinishLLM(traceCtx, llmSpan, nil, relayInfo)
+				return
+			}
+			otelRuntime.FinishLLM(traceCtx, llmSpan, newAPIError, relayInfo)
+		}()
+	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -217,15 +235,38 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
-		switch relayFormat {
-		case types.RelayFormatOpenAIRealtime:
-			newAPIError = relay.WssHelper(c, relayInfo)
-		case types.RelayFormatClaude:
-			newAPIError = relay.ClaudeHelper(c, relayInfo)
-		case types.RelayFormatGemini:
-			newAPIError = geminiRelayHandler(c, relayInfo)
-		default:
-			newAPIError = relayHandler(c, relayInfo)
+		// The closure keeps the in-flight counter balanced even when the relay
+		// panics, because the deferred decrement still runs while unwinding.
+		attemptParentCtx := c.Request.Context()
+		attemptCtx := attemptParentCtx
+		var attemptSpan trace.Span
+		if otelRuntime != nil {
+			attemptCtx, attemptSpan = otelRuntime.StartAttempt(attemptParentCtx, relayInfo, channel.Id, channel.Type, channel.Name)
+		}
+		func() {
+			c.Request = c.Request.WithContext(attemptCtx)
+			defer func() { c.Request = c.Request.WithContext(attemptParentCtx) }()
+			channelmetrics.IncInFlight(channel.Id)
+			defer channelmetrics.DecInFlight(channel.Id)
+
+			switch relayFormat {
+			case types.RelayFormatOpenAIRealtime:
+				newAPIError = relay.WssHelper(c, relayInfo)
+			case types.RelayFormatClaude:
+				newAPIError = relay.ClaudeHelper(c, relayInfo)
+			case types.RelayFormatGemini:
+				newAPIError = geminiRelayHandler(c, relayInfo)
+			default:
+				newAPIError = relayHandler(c, relayInfo)
+			}
+		}()
+		if otelRuntime != nil {
+			attemptSpan.SetAttributes(attribute.String("new_api.upstream_model", relayInfo.UpstreamModelName))
+			if newAPIError == nil {
+				otelRuntime.FinishSpan(attemptSpan, nil)
+			} else {
+				otelRuntime.FinishSpan(attemptSpan, newAPIError)
+			}
 		}
 
 		if newAPIError == nil {

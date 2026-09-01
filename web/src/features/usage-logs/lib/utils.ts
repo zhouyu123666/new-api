@@ -31,6 +31,8 @@ import {
   LOG_TYPES,
   DISPLAYABLE_LOG_TYPES,
   TIMING_LOG_TYPES,
+  LOG_TYPE_RETRY_VALUE,
+  LOG_TYPE_STREAM_ERROR_VALUE,
 } from '../constants'
 import type {
   GetLogsParams,
@@ -39,6 +41,40 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
 } from '../types'
+
+export { buildQueryParams } from './query-params'
+
+type LogTypeParams = {
+  type: number | undefined
+  stream_error: boolean | undefined
+  retry: boolean | undefined
+}
+
+function resolveLogTypeParams(
+  value: unknown,
+  allowRetry: boolean
+): LogTypeParams {
+  let filterValue: unknown
+  if (Array.isArray(value) && value.length === 1) {
+    filterValue = value[0]
+  } else if (typeof value === 'string' && value !== '') {
+    filterValue = value
+  }
+
+  if (filterValue === LOG_TYPE_STREAM_ERROR_VALUE) {
+    return { type: undefined, stream_error: true, retry: undefined }
+  }
+  if (allowRetry && filterValue === LOG_TYPE_RETRY_VALUE) {
+    return { type: undefined, stream_error: undefined, retry: true }
+  }
+
+  const type = Number(filterValue)
+  return {
+    type: filterValue !== undefined && Number.isFinite(type) ? type : undefined,
+    stream_error: undefined,
+    retry: undefined,
+  }
+}
 
 // ============================================================================
 // Type Checkers & Utilities
@@ -89,24 +125,6 @@ export function getDefaultTimeRange(): { start: Date; end: Date } {
  */
 function timestampToSeconds(ms: number): number {
   return Math.floor(ms / 1000)
-}
-
-/**
- * Build query parameters from filters
- */
-export function buildQueryParams(
-  params: Record<string, unknown>
-): URLSearchParams {
-  const queryParams = new URLSearchParams()
-
-  Object.entries(params).forEach(([key, value]) => {
-    // Keep 0 as a valid value, only filter out undefined, null, and empty string
-    if (value !== undefined && value !== null && value !== '') {
-      queryParams.append(key, String(value))
-    }
-  })
-
-  return queryParams
 }
 
 /**
@@ -178,28 +196,13 @@ export function buildApiParams(config: {
   isAdmin: boolean
 }): GetLogsParams {
   const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
-
-  // Helper to process type parameter (single value from array)
-  const processType = (value: unknown): number | undefined => {
-    const parseType = (raw: unknown): number | undefined => {
-      const type = Number(raw)
-      return Number.isFinite(type) ? type : undefined
-    }
-
-    if (Array.isArray(value) && value.length === 1) {
-      return parseType(value[0])
-    }
-    if (typeof value === 'string' && value !== '') {
-      return parseType(value)
-    }
-    return undefined
-  }
+  const typeParams = resolveLogTypeParams(searchParams.type, isAdmin)
 
   // Build base params from search params
   const params: GetLogsParams = {
     p: page,
     page_size: pageSize,
-    ...(searchParams.type ? { type: processType(searchParams.type) } : {}),
+    ...typeParams,
     ...(searchParams.model ? { model_name: String(searchParams.model) } : {}),
     ...(searchParams.token ? { token_name: String(searchParams.token) } : {}),
     ...(searchParams.group ? { group: String(searchParams.group) } : {}),
@@ -225,7 +228,7 @@ export function buildApiParams(config: {
 
       switch (id) {
         case 'type':
-          params.type = processType(value)
+          Object.assign(params, resolveLogTypeParams(value, isAdmin))
           break
         case 'model_name':
           params.model_name = String(value)
