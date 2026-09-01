@@ -24,6 +24,7 @@ import { useStatus } from '@/hooks/use-status'
 import { getAllModelSquare, getPricing } from '../api'
 import type { ModelSquareData, PricingData } from '../types'
 
+export function usePricingData(enabled = true) {
 export function usePricingData(options?: {
   modelSquare?: boolean
 }) {
@@ -34,6 +35,7 @@ export function usePricingData(options?: {
     queryFn: getPricing,
     enabled: options?.modelSquare !== true,
     staleTime: 5 * 60 * 1000,
+    enabled,
   })
   const modelSquareQuery = useQuery<ModelSquareData>({
     queryKey: ['model-square'],
