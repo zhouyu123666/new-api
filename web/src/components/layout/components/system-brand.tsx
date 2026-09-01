@@ -61,8 +61,8 @@ export function SystemBrand(props: SystemBrandProps) {
         to='/'
         aria-label={t('Go to home')}
         className={cn(
-          'text-foreground inline-flex h-7 items-center gap-1.5 rounded-md px-1.5 text-sm font-medium transition-colors outline-none select-none',
-          'hover:bg-accent focus-visible:ring-ring/40 focus-visible:ring-2'
+          'text-foreground inline-flex h-8 items-center gap-1.5 rounded-full bg-primary/10 px-2 text-sm font-medium transition-colors outline-none select-none',
+          'hover:bg-primary/15 focus-visible:ring-ring/40 focus-visible:ring-2'
         )}
       >
         <div className='flex size-5 items-center justify-center overflow-hidden rounded-md'>
