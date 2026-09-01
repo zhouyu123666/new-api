@@ -3,4 +3,4 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: new-api:gh_dev
+    image: new-api:prod
