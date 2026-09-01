@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -37,6 +37,14 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
@@ -76,6 +84,16 @@ const chatToResponsesPolicyAllChannelsExample = JSON.stringify(
   2
 )
 
+const gptRequestFastPolicyOptions = [
+  { value: 'disabled', label: 'Disable fast' },
+  { value: 'allow', label: 'Allow client choice' },
+] as const
+
+const gptRequestReasoningPolicyOptions = [
+  { value: 'client', label: 'Use client value' },
+  { value: 'cap_xhigh', label: 'Cap at xhigh' },
+] as const
+
 const jsonString = z.string().refine((value) => {
   const trimmed = value.trim()
   if (!trimmed) return true
@@ -92,6 +110,10 @@ const schema = z.object({
     pass_through_request_enabled: z.boolean(),
     thinking_model_blacklist: jsonString,
     chat_completions_to_responses_policy: jsonString,
+    gpt_request_policy: z.object({
+      fast_policy: z.enum(['disabled', 'allow']),
+      reasoning_policy: z.enum(['client', 'cap_xhigh']),
+    }),
   }),
   general_setting: z.object({
     ping_interval_enabled: z.boolean(),
@@ -106,6 +128,8 @@ type FlatGlobalModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
+  'global.gpt_request_policy.fast_policy': 'disabled' | 'allow'
+  'global.gpt_request_policy.reasoning_policy': 'client' | 'cap_xhigh'
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
 }
@@ -123,6 +147,10 @@ const flattenGlobalValues = (
     values.global.chat_completions_to_responses_policy,
     '{}'
   ),
+  'global.gpt_request_policy.fast_policy':
+    values.global.gpt_request_policy.fast_policy,
+  'global.gpt_request_policy.reasoning_policy':
+    values.global.gpt_request_policy.reasoning_policy,
   'general_setting.ping_interval_enabled':
     values.general_setting.ping_interval_enabled,
   'general_setting.ping_interval_seconds':
@@ -141,6 +169,11 @@ type GlobalSettingsCardProps = {
 export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const defaultValuesKey = JSON.stringify(defaultValues)
+  const stableDefaultValues = useMemo(
+    () => JSON.parse(defaultValuesKey) as GlobalModelSettingsFormValues,
+    [defaultValuesKey]
+  )
 
   const form = useForm<
     GlobalModelSettingsFormInput,
@@ -148,17 +181,17 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
     GlobalModelSettingsFormValues
   >({
     resolver: zodResolver(schema),
-    defaultValues: defaultValues as GlobalModelSettingsFormInput,
+    defaultValues: stableDefaultValues as GlobalModelSettingsFormInput,
   })
 
   useEffect(() => {
-    form.reset(defaultValues as GlobalModelSettingsFormInput)
-  }, [defaultValues, form])
+    form.reset(stableDefaultValues as GlobalModelSettingsFormInput)
+  }, [form, stableDefaultValues])
 
   const pingEnabled = form.watch('general_setting.ping_interval_enabled')
 
   const onSubmit = async (values: GlobalModelSettingsFormValues) => {
-    const flattenedDefaults = flattenGlobalValues(defaultValues)
+    const flattenedDefaults = flattenGlobalValues(stableDefaultValues)
     const flattenedValues = flattenGlobalValues(values)
     const updates = Object.entries(flattenedValues).filter(
       ([key, value]) =>
@@ -170,11 +203,20 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
       return
     }
 
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value,
-      })
+    try {
+      for (const [key, value] of updates) {
+        await updateOption.mutateAsync({
+          key,
+          value,
+        })
+      }
+      // The mutation updates the query cache and refetches the authoritative
+      // server snapshot. Resetting here also clears stale dirty state while
+      // that refetch is in flight.
+      form.reset(values as GlobalModelSettingsFormInput)
+    } catch {
+      // useUpdateOption already reports the server error; keep unsaved values
+      // in the form so the user can correct and retry them.
     }
   }
 
@@ -208,6 +250,114 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
               </SettingsSwitchItem>
             )}
           />
+
+          <Separator />
+
+          <div className='space-y-4'>
+            <div className='flex items-center gap-2'>
+              <h3 className='text-base font-semibold'>
+                {t('GPT Request Parameter Policy')}
+              </h3>
+              <StatusBadge
+                label={t('Preview')}
+                variant='neutral'
+                copyable={false}
+              />
+            </div>
+
+            <Alert>
+              <AlertTitle>{t('Central policy')}</AlertTitle>
+              <AlertDescription>
+                {t(
+                  'These controls apply to all GPT requests sent through supported GPT channels.'
+                )}
+              </AlertDescription>
+            </Alert>
+
+            <div className='grid gap-5 lg:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='global.gpt_request_policy.fast_policy'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Fast service tier policy')}</FormLabel>
+                    <Select
+                      items={gptRequestFastPolicyOptions.map((option) => ({
+                        value: option.value,
+                        label: t(option.label),
+                      }))}
+                      value={field.value}
+                      onValueChange={(value) => {
+                        if (value) field.onChange(value)
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {gptRequestFastPolicyOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {t(option.label)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {t(
+                        'Choose whether fast is removed or passed through for GPT requests.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='global.gpt_request_policy.reasoning_policy'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Reasoning effort policy')}</FormLabel>
+                    <Select
+                      items={gptRequestReasoningPolicyOptions.map((option) => ({
+                        value: option.value,
+                        label: t(option.label),
+                      }))}
+                      value={field.value}
+                      onValueChange={(value) => {
+                        if (value) field.onChange(value)
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {gptRequestReasoningPolicyOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {t(option.label)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {t(
+                        'Choose whether GPT requests keep the client value or cap reasoning effort at the configured maximum.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </div>
 
           <FormField
             control={form.control}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -216,6 +217,20 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	switch key {
+	case "global.gpt_request_policy.tags":
+		if len(strings.TrimSpace(value)) > 512 {
+			return fmt.Errorf("GPT channel tags must be at most 512 characters")
+		}
+	case "global.gpt_request_policy.fast_policy":
+		if value != "disabled" && value != "allow" {
+			return fmt.Errorf("invalid GPT fast service tier policy: %s", value)
+		}
+	case "global.gpt_request_policy.reasoning_policy":
+		if value != "client" && value != "cap_xhigh" {
+			return fmt.Errorf("invalid GPT reasoning policy: %s", value)
+		}
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -228,7 +243,20 @@ func validateOptionValue(key string, value string) error {
 	return nil
 }
 
+func normalizeOptionValue(key string, value string) string {
+	switch key {
+	case "global.gpt_request_policy.tags":
+		return strings.TrimSpace(value)
+	case "global.gpt_request_policy.fast_policy",
+		"global.gpt_request_policy.reasoning_policy":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return value
+	}
+}
+
 func UpdateOption(key string, value string) error {
+	value = normalizeOptionValue(key, value)
 	if err := validateOptionValue(key, value); err != nil {
 		return err
 	}
@@ -237,12 +265,16 @@ func UpdateOption(key string, value string) error {
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -256,13 +288,16 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	normalizedValues := make(map[string]string, len(values))
 	for key, value := range values {
+		value = normalizeOptionValue(key, value)
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
+		normalizedValues[key] = value
 	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
+		for k, v := range normalizedValues {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
@@ -277,7 +312,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
+	for k, v := range normalizedValues {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}

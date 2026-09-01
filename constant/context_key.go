@@ -26,6 +26,7 @@ const (
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"
 	ContextKeyChannelName              ContextKey = "channel_name"
+	ContextKeyChannelTag               ContextKey = "channel_tag"
 	ContextKeyProviderSlug             ContextKey = "provider_slug"
 	ContextKeyChannelCreateTime        ContextKey = "channel_create_time"
 	ContextKeyChannelBaseUrl           ContextKey = "base_url"

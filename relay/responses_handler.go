@@ -38,7 +38,8 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	case *dto.OpenAIResponsesCompactionRequest:
 		// Only fields documented for POST /v1/responses/compact are forwarded:
 		// model, input, instructions, previous_response_id, prompt_cache_key,
-		// prompt_cache_options, prompt_cache_retention, service_tier.
+		// prompt_cache_options, prompt_cache_retention. Codex service_tier is
+		// recorded for analytics but intentionally not forwarded.
 		// Undocumented Codex-parity fields (tools, reasoning, text) are parsed
 		// for client compatibility but intentionally not sent upstream.
 		responsesReq = &dto.OpenAIResponsesRequest{
@@ -82,7 +83,25 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		if relaycommon.IsGPTRequestPolicyChannel(info) {
+			storedBytes, err := storage.Bytes()
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+			}
+			jsonData, err := relaycommon.ApplyGPTRequestPolicyJSON(info, storedBytes)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			relaycommon.ApplyGPTReasoningEffortCap(info)
+			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer closer.Close()
+			requestBody = body
+		} else {
+			requestBody = common.NewReplayableBodyReader(storage)
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
 		if err != nil {
@@ -94,8 +113,16 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 
+		// The global GPT policy can override the generic channel-level
+		// service_tier filter for GPT channels. Other disabled fields keep their normal
+		// channel settings.
+		channelOtherSettings := info.ChannelOtherSettings
+		if relaycommon.ShouldForwardGPTServiceTier(info) {
+			channelOtherSettings.AllowServiceTier = true
+		}
+
 		// remove disabled fields for OpenAI Responses API
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, channelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -106,6 +133,13 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
+		}
+		if relaycommon.IsGPTRequestPolicyChannel(info) {
+			jsonData, err = relaycommon.ApplyGPTRequestPolicyJSON(info, jsonData)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			relaycommon.ApplyGPTReasoningEffortCap(info)
 		}
 
 		logger.LogDebug(c, "requestBody: %s", jsonData)

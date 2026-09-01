@@ -412,8 +412,20 @@ func UpdateOption(c *gin.Context) {
 	recordManageAudit(c, "option.update", map[string]interface{}{
 		"key": option.Key,
 	})
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"success": true,
 		"message": "",
-	})
+	}
+	// Return the canonical value only for the GPT policy settings that need
+	// immediate frontend reconciliation. Do not echo arbitrary option values,
+	// since some settings contain secrets.
+	if strings.HasPrefix(option.Key, "global.gpt_request_policy.") {
+		common.OptionMapRWMutex.RLock()
+		response["data"] = gin.H{
+			"key":   option.Key,
+			"value": common.OptionMap[option.Key],
+		}
+		common.OptionMapRWMutex.RUnlock()
+	}
+	c.JSON(http.StatusOK, response)
 }

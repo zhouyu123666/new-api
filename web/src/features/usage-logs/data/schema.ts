@@ -37,6 +37,7 @@ export const usageLogSchema = z.object({
   completion_tokens: z.number().default(0),
   use_time: z.number().default(0),
   is_stream: z.boolean().default(false),
+  fast_mode: z.boolean().default(false),
   channel: z.number().default(0),
   provider_slug: z.string().default(''),
   channel_name: z.string().nullish().default(''),

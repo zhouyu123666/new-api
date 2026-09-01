@@ -204,6 +204,7 @@ export interface LogOtherData {
   request_rules?: RequestRuleTrace[]
   usage_facts?: Record<string, string | number>
   reasoning_effort?: string
+  fast_mode?: boolean
   image?: boolean
   image_ratio?: number
   image_output?: number
@@ -260,6 +261,9 @@ export interface LogStatistics {
   quota: number
   rpm: number
   tpm: number
+  total_count: number
+  fast_count: number
+  fast_ratio: number
 }
 
 // ============================================================================

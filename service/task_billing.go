@@ -74,6 +74,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo, task *model
 		Quota:     info.PriceData.Quota,
 		Content:   logContent,
 		TokenId:   info.TokenId,
+		FastMode:  info.FastMode,
 		Group:     info.UsingGroup,
 		Other:     other,
 	})

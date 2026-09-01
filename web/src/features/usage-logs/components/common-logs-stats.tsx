@@ -102,6 +102,11 @@ export function CommonLogsStats() {
         value={stats?.tpm || 0}
         accent='bg-slate-400/70'
       />
+      <StatBadge
+        label={t('Fast requests')}
+        value={`${stats?.fast_count || 0}/${stats?.total_count || 0} (${((stats?.fast_ratio || 0) * 100).toFixed(1)}%)`}
+        accent='bg-amber-500/70'
+      />
     </div>
   )
 }

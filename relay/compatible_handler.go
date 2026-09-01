@@ -104,7 +104,25 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 				logger.LogDebug(c, "requestBody: %s", debugBytes)
 			}
 		}
-		requestBody = common.NewReplayableBodyReader(storage)
+		if relaycommon.IsGPTRequestPolicyChannel(info) {
+			storedBytes, err := storage.Bytes()
+			if err != nil {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+			jsonData, err := relaycommon.ApplyGPTRequestPolicyJSON(info, storedBytes)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			relaycommon.ApplyGPTReasoningEffortCap(info)
+			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			defer closer.Close()
+			requestBody = body
+		} else {
+			requestBody = common.NewReplayableBodyReader(storage)
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertOpenAIRequest(c, info, request)
 		if err != nil {
@@ -154,13 +172,21 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			}
 		}
 
+		if converted, ok := convertedRequest.(*dto.GeneralOpenAIRequest); ok {
+			relaycommon.ApplyGPTChatRequestPolicy(info, converted)
+		}
+
 		jsonData, err := common.Marshal(convertedRequest)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeJsonMarshalFailed, types.ErrOptionWithSkipRetry())
 		}
 
 		// remove disabled fields for OpenAI API
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+		channelOtherSettings := info.ChannelOtherSettings
+		if relaycommon.ShouldForwardGPTServiceTier(info) {
+			channelOtherSettings.AllowServiceTier = true
+		}
+		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, channelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
 		if err != nil {
 			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
@@ -171,6 +197,13 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			if err != nil {
 				return newAPIErrorFromParamOverride(err)
 			}
+		}
+		if relaycommon.IsGPTRequestPolicyChannel(info) {
+			jsonData, err = relaycommon.ApplyGPTRequestPolicyJSON(info, jsonData)
+			if err != nil {
+				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			relaycommon.ApplyGPTReasoningEffortCap(info)
 		}
 
 		logger.LogDebug(c, "text request body: %s", jsonData)
