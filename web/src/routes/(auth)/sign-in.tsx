@@ -37,7 +37,7 @@ export const Route = createFileRoute('/(auth)/sign-in')({
     if (auth.user) {
       const target =
         sanitizeAuthRedirect(search?.redirect, window.location.origin) ??
-        '/dashboard'
+        '/model-square'
       throw redirect({ href: target, replace: true })
     }
   },

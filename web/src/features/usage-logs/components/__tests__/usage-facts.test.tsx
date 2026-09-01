@@ -54,6 +54,7 @@ function makeLog(other: LogOtherData): UsageLog {
     use_time: 0,
     is_stream: false,
     channel: 1,
+    provider_slug: '',
     channel_name: '',
     token_id: 1,
     group: 'default',

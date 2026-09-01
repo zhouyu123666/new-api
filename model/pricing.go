@@ -23,6 +23,10 @@ type Pricing struct {
 	Icon                   string                               `json:"icon,omitempty"`
 	Tags                   string                               `json:"tags,omitempty"`
 	VendorID               int                                  `json:"vendor_id,omitempty"`
+	ContextLength          int64                   `json:"context_length,omitempty"`
+    	ParameterCount         string                  `json:"parameter_count,omitempty"`
+    	ReleaseDate            string                  `json:"release_date,omitempty"`
+    	Providers              []ProviderSummary       `json:"providers,omitempty"`
 	QuotaType              int                                  `json:"quota_type"`
 	ModelRatio             float64                              `json:"model_ratio"`
 	ModelPrice             float64                              `json:"model_price"`
@@ -188,6 +192,7 @@ func updatePricing() {
 		common.SysLog(fmt.Sprintf("GetAllEnableAbilityWithChannels error: %v", err))
 		return
 	}
+	providerSummaries := BuildProviderSummaries(enableAbilities)
 	// 预加载模型元数据与供应商一次，避免循环查询
 	var allMeta []Model
 	_ = DB.Find(&allMeta).Error
@@ -377,7 +382,11 @@ func updatePricing() {
 			pricing.Icon = meta.Icon
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
+			pricing.ContextLength = meta.ContextLength
+			pricing.ParameterCount = meta.ParameterCount
+			pricing.ReleaseDate = meta.ReleaseDate
 		}
+		pricing.Providers = providerSummaries[model]
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice

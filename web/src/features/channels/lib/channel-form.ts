@@ -219,6 +219,7 @@ export const channelFormSchema = z
     test_model: z.string().optional(),
     auto_ban: z.number().optional(),
     status: z.number(),
+    provider_slug: z.string().optional(),
     status_code_mapping: z
       .string()
       .optional()
@@ -426,6 +427,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   test_model: '',
   auto_ban: 1,
   status: CHANNEL_STATUS.ENABLED,
+  provider_slug: '',
   status_code_mapping: '',
   tag: '',
   remark: '',
@@ -567,6 +569,7 @@ export function transformChannelToFormDefaults(
 
   return {
     name: channel.name || '',
+    provider_slug: channel.provider_slug || '',
     type: channel.type,
     base_url: channel.base_url || '',
     key: '', // Never populate key from backend for security
@@ -802,6 +805,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
 
   const channel: Partial<Channel> = {
     name: formData.name,
+    provider_slug: formData.provider_slug?.trim() || null,
     type: formData.type,
     base_url: normalizeBaseUrl(formData.base_url) || null,
     key: formData.key,
@@ -851,6 +855,7 @@ export function transformFormDataToUpdatePayload(
   const payload: Partial<Channel> = {
     id: channelId,
     name: formData.name,
+    provider_slug: formData.provider_slug?.trim() || null,
     type: formData.type,
     base_url: normalizeBaseUrl(formData.base_url) || null,
     openai_organization: formData.openai_organization || null,

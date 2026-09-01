@@ -330,6 +330,26 @@ export function useCommonLogsColumns(
     },
   ]
 
+  columns.push({
+    accessorKey: 'provider_slug',
+    header: t('Provider'),
+    cell: ({ row }) => {
+      const log = row.original
+      if (!isDisplayableLogType(log.type) || !log.provider_slug) return null
+      return (
+        <StatusBadge
+          label={log.provider_slug}
+          autoColor={log.provider_slug}
+          copyText={log.provider_slug}
+          size='sm'
+          showDot={false}
+          className='font-mono'
+        />
+      )
+    },
+    size: 140,
+  })
+
   if (isAdmin) {
     columns.push(
       {

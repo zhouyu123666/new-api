@@ -35,7 +35,11 @@ import {
 import { getTaskNumberFields } from '../lib/task-expr'
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
-import { formatPrice, formatRequestPrice } from '../lib/price'
+import {
+  formatPrimaryProviderPrice,
+  formatRequestPrice,
+  getPrimaryProvider,
+} from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
@@ -70,7 +74,11 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     props.model.billing_mode === 'tiered_expr' &&
     Boolean(props.model.billing_expr)
   const isUnconfiguredTaskUsage = isUnconfiguredTaskUsageModel(props.model)
-  const hasCachedPrice = isTokenBased && props.model.cache_ratio != null
+  const primaryProvider = getPrimaryProvider(props.model)
+  const hasCachedPrice =
+    isTokenBased &&
+    (props.model.cache_ratio != null ||
+      primaryProvider?.pricing?.cache_read_price != null)
   const dynamicPriceOptions = {
     tokenUnit,
     showRechargePrice,
@@ -82,7 +90,16 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     ),
   }
   const dynamicSummary = isDynamicPricing
-    ? getDynamicPricingSummary(props.model, dynamicPriceOptions)
+    ? getDynamicPricingSummary(props.model, {
+        tokenUnit,
+        showRechargePrice,
+        priceRate,
+        usdExchangeRate,
+        groupRatioMultiplier: getDynamicDisplayGroupRatio(
+          props.model,
+          props.selectedGroup
+        ),
+      })
     : null
   const cardExamplePrice = getCardExamplePrice(
     props.model,
@@ -181,7 +198,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         <span className='text-muted-foreground whitespace-nowrap'>
           {t('Input')}{' '}
           <span className='text-foreground font-mono font-semibold'>
-            {formatPrice(
+            {formatPrimaryProviderPrice(
               props.model,
               'input',
               tokenUnit,
@@ -195,7 +212,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         <span className='text-muted-foreground whitespace-nowrap'>
           {t('Output')}{' '}
           <span className='text-foreground font-mono font-semibold'>
-            {formatPrice(
+            {formatPrimaryProviderPrice(
               props.model,
               'output',
               tokenUnit,
@@ -210,7 +227,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           <span className='text-muted-foreground whitespace-nowrap'>
             {t('Cached')}{' '}
             <span className='text-foreground font-mono font-semibold'>
-              {formatPrice(
+              {formatPrimaryProviderPrice(
                 props.model,
                 'cache',
                 tokenUnit,
@@ -243,9 +260,18 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
 
   return (
     <div
+      role='button'
+      tabIndex={0}
+      onClick={props.onClick}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          props.onClick()
+        }
+      }}
       className={cn(
-        'group relative flex flex-col rounded-xl border p-3 transition-colors sm:p-5',
-        'hover:bg-muted/20'
+        'group relative flex cursor-pointer flex-col rounded-lg border bg-muted/20 p-3 transition-colors sm:p-4',
+        'hover:border-primary/40 hover:bg-muted/40'
       )}
     >
       {/* Header: icon + name + price + actions */}
@@ -258,8 +284,8 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               </span>
             )}
           </div>
-          <div className='min-w-0'>
-            <h3 className='text-foreground truncate font-mono text-[15px] leading-tight font-bold'>
+          <div className='min-w-0 flex-1'>
+            <h3 className='text-foreground whitespace-normal font-mono text-sm leading-tight font-semibold break-all sm:text-[15px]'>
               {props.model.model_name}
             </h3>
             <div className='mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm sm:mt-1 sm:gap-x-3'>
@@ -271,7 +297,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         <div className='flex shrink-0 items-center gap-1.5'>
           <button
             type='button'
-            onClick={props.onClick}
+            onClick={(event) => {
+              event.stopPropagation()
+              props.onClick()
+            }}
             className='text-muted-foreground hover:text-foreground hover:bg-muted inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors sm:px-2.5 sm:py-1.5'
           >
             {t('Details')}
@@ -279,7 +308,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
           </button>
           <button
             type='button'
-            onClick={handleCopy}
+            onClick={(event) => {
+              event.stopPropagation()
+              handleCopy(event)
+            }}
             className='text-muted-foreground hover:text-foreground hover:bg-muted rounded-md border p-1.5 transition-colors'
             title={t('Copy')}
           >

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
@@ -71,6 +72,7 @@ type Log struct {
 	UseTime           int    `json:"use_time" gorm:"default:0"`
 	IsStream          bool   `json:"is_stream"`
 	ChannelId         int    `json:"channel" gorm:"index"`
+	ProviderSlug      string `json:"provider_slug,omitempty" gorm:"size:64;index"`
 	ChannelName       string `json:"channel_name" gorm:"->"`
 	TokenId           int    `json:"token_id" gorm:"default:0;index"`
 	Group             string `json:"group" gorm:"index"`
@@ -101,6 +103,22 @@ func ensureLogRequestId(log *Log) {
 func createLog(log *Log) error {
 	ensureLogRequestId(log)
 	return LOG_DB.Create(log).Error
+}
+
+func resolveLogProviderSlug(c *gin.Context, channelId int) string {
+	if c != nil {
+		if providerSlug := common.GetContextKeyString(c, constant.ContextKeyProviderSlug); providerSlug != "" {
+			return providerSlug
+		}
+	}
+	if channelId <= 0 {
+		return ""
+	}
+	channel, err := GetChannelById(channelId, false)
+	if err != nil || channel == nil {
+		return ""
+	}
+	return channel.GetProviderSlug()
 }
 
 func clickHouseLogOrder(prefix string) string {
@@ -320,6 +338,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		ModelName:        modelName,
 		Quota:            0,
 		ChannelId:        channelId,
+		ProviderSlug:     resolveLogProviderSlug(c, channelId),
 		TokenId:          tokenId,
 		UseTime:          useTimeSeconds,
 		IsStream:         isStream,
@@ -342,6 +361,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 
 type RecordConsumeLogParams struct {
 	ChannelId        int                    `json:"channel_id"`
+	ProviderSlug     string                 `json:"provider_slug,omitempty"`
 	PromptTokens     int                    `json:"prompt_tokens"`
 	CompletionTokens int                    `json:"completion_tokens"`
 	ModelName        string                 `json:"model_name"`
@@ -384,10 +404,16 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		ModelName:        params.ModelName,
 		Quota:            params.Quota,
 		ChannelId:        params.ChannelId,
-		TokenId:          params.TokenId,
-		UseTime:          params.UseTimeSeconds,
-		IsStream:         params.IsStream,
-		Group:            params.Group,
+		ProviderSlug: func() string {
+			if params.ProviderSlug != "" {
+				return params.ProviderSlug
+			}
+			return resolveLogProviderSlug(c, params.ChannelId)
+		}(),
+		TokenId:  params.TokenId,
+		UseTime:  params.UseTimeSeconds,
+		IsStream: params.IsStream,
+		Group:    params.Group,
 		Ip: func() string {
 			if needRecordIp {
 				return c.ClientIP()
@@ -419,16 +445,17 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 }
 
 type RecordTaskBillingLogParams struct {
-	UserId    int
-	LogType   int
-	Content   string
-	ChannelId int
-	ModelName string
-	Quota     int
-	TokenId   int
-	Group     string
-	Other     map[string]interface{}
-	NodeName  string // 任务发起节点；为空时回退当前节点
+	UserId       int
+	LogType      int
+	Content      string
+	ChannelId    int
+	ProviderSlug string
+	ModelName    string
+	Quota        int
+	TokenId      int
+	Group        string
+	Other        map[string]interface{}
+	NodeName     string // 任务发起节点；为空时回退当前节点
 }
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
@@ -453,9 +480,15 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		ModelName: params.ModelName,
 		Quota:     params.Quota,
 		ChannelId: params.ChannelId,
-		TokenId:   params.TokenId,
-		Group:     params.Group,
-		Other:     common.MapToJsonStr(params.Other),
+		ProviderSlug: func() string {
+			if params.ProviderSlug != "" {
+				return params.ProviderSlug
+			}
+			return resolveLogProviderSlug(nil, params.ChannelId)
+		}(),
+		TokenId: params.TokenId,
+		Group:   params.Group,
+		Other:   common.MapToJsonStr(params.Other),
 	}
 	err := createLog(log)
 	if err != nil {

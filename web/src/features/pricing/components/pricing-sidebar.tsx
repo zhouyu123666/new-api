@@ -37,8 +37,13 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
+import {
+  ADVANCED_RANGE_OPTIONS,
+  PARAMETER_RANGE_OPTIONS,
+  parseTags,
+  type PricingAdvancedFilters,
+} from '../lib/filters'
 import { hasTaskUsageSchema } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
 import type { PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {
@@ -54,6 +59,7 @@ type FilterSectionProps = {
   value: string
   options: FilterOption[]
   onChange: (value: string) => void
+  includeAll?: boolean
 }
 
 export interface PricingSidebarProps {
@@ -74,6 +80,20 @@ export interface PricingSidebarProps {
   models: PricingModel[]
   hasActiveFilters: boolean
   onClearFilters: () => void
+  advancedFilters: PricingAdvancedFilters
+  advancedOptions: {
+    hasContextLength: boolean
+    hasParameterCount: boolean
+    hasReleaseDate: boolean
+    hasFree: boolean
+    hasBatch: boolean
+    regions: string[]
+    quantizations: string[]
+  }
+  onAdvancedFilterChange: (
+    key: keyof PricingAdvancedFilters,
+    value: string
+  ) => void
   className?: string
 }
 
@@ -102,7 +122,7 @@ function FilterChip(props: {
       type='button'
       onClick={props.onClick}
       className={cn(
-        'group inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-all',
+        'group inline-flex min-w-0 items-center justify-between gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-all',
         props.active
           ? 'border-foreground/30 bg-foreground/5 text-foreground shadow-sm'
           : 'border-border/70 bg-background text-muted-foreground hover:border-border hover:bg-muted/50 hover:text-foreground'
@@ -130,6 +150,8 @@ function FilterChip(props: {
 }
 
 function FilterSection(props: FilterSectionProps) {
+  const { t } = useTranslation()
+
   return (
     <Collapsible
       defaultOpen
@@ -142,7 +164,14 @@ function FilterSection(props: FilterSectionProps) {
         <ChevronDown className='text-muted-foreground size-4 transition-transform group-data-[panel-open]:rotate-180' />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className='flex flex-wrap gap-1.5'>
+        <div className='grid grid-cols-2 gap-2'>
+          {props.includeAll && (
+            <FilterChip
+              option={{ value: FILTER_ALL, label: t('All') }}
+              active={props.value === FILTER_ALL}
+              onClick={() => props.onChange(FILTER_ALL)}
+            />
+          )}
           {props.options.map((option) => (
             <FilterChip
               key={option.value}
@@ -257,11 +286,161 @@ export function PricingSidebar(props: PricingSidebarProps) {
       })),
   ]
 
+  const advancedSections: FilterSectionProps[] = [
+    ...(props.advancedOptions.hasContextLength
+      ? [
+          {
+            title: t('Context'),
+            value: props.advancedFilters.contextLength,
+            options: ADVANCED_RANGE_OPTIONS.map((option) => ({
+              ...option,
+              label: t(option.label),
+            })),
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('contextLength', value),
+          },
+        ]
+      : []),
+    ...(props.advancedOptions.hasParameterCount
+      ? [
+          {
+            title: t('Parameters'),
+            value: props.advancedFilters.parameterCount,
+            options: PARAMETER_RANGE_OPTIONS.map((option) => ({
+              ...option,
+              label: t(option.label),
+            })),
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('parameterCount', value),
+          },
+        ]
+      : []),
+    ...(props.advancedOptions.hasReleaseDate
+      ? [
+          {
+            title: t('Publish Date'),
+            value: props.advancedFilters.releaseDate,
+            options: [
+              { value: '30', label: t('≤ 30 days') },
+              { value: '90', label: t('≤ 90 days') },
+              { value: '365', label: t('≤ 1 year') },
+            ],
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('releaseDate', value),
+          },
+        ]
+      : []),
+    ...(props.advancedOptions.hasFree
+      ? [
+          {
+            title: t('Free routing mode'),
+            value: props.advancedFilters.free,
+            options: [{ value: 'supported', label: t('Supported') }],
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('free', value),
+          },
+        ]
+      : []),
+    ...(props.advancedOptions.hasBatch
+      ? [
+          {
+            title: t('Batch capability'),
+            value: props.advancedFilters.batch,
+            options: [{ value: 'supported', label: t('Supported') }],
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('batch', value),
+          },
+        ]
+      : []),
+    ...(props.advancedOptions.regions.length > 0
+      ? [
+          {
+            title: t('Region'),
+            value: props.advancedFilters.region,
+            options: props.advancedOptions.regions.map((region) => ({
+              value: region,
+              label: region,
+            })),
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('region', value),
+          },
+        ]
+      : []),
+    ...(props.advancedOptions.quantizations.length > 0
+      ? [
+          {
+            title: t('Quantization'),
+            value: props.advancedFilters.quantization,
+            options: props.advancedOptions.quantizations.map((quantization) => ({
+              value: quantization,
+              label: quantization,
+            })),
+            onChange: (value: string) =>
+              props.onAdvancedFilterChange('quantization', value),
+          },
+        ]
+      : []),
+  ]
+
+  const sections: FilterSectionProps[] = [
+    ...(groupOptions.length > 1
+      ? [
+          {
+            title: t('Groups'),
+            value: props.groupFilter,
+            options: groupOptions,
+            onChange: props.onGroupChange,
+          },
+        ]
+      : []),
+    ...(vendorOptions.length > 1
+      ? [
+          {
+            title: t('All Vendors'),
+            value: props.vendorFilter,
+            options: vendorOptions,
+            onChange: props.onVendorChange,
+          },
+        ]
+      : []),
+    ...(tagOptions.length > 1
+      ? [
+          {
+            title: t('Model Tags'),
+            value: props.tagFilter,
+            options: tagOptions,
+            onChange: props.onTagChange,
+          },
+        ]
+      : []),
+    {
+      title: t('Pricing Type'),
+      value: props.quotaTypeFilter,
+      options: quotaOptions,
+      onChange: props.onQuotaTypeChange,
+    },
+    ...(endpointOptions.length > 1
+      ? [
+          {
+            title: t('Endpoint Type'),
+            value: props.endpointTypeFilter,
+            options: endpointOptions,
+            onChange: props.onEndpointTypeChange,
+          },
+        ]
+      : []),
+    ...advancedSections,
+  ]
+
   return (
-    <aside className={cn('rounded-xl border p-3', props.className)}>
-      <div className='mb-2.5 flex items-center justify-between gap-2'>
+    <aside
+      className={cn('rounded-xl border bg-background/70 p-3', props.className)}
+    >
+      <div className='mb-3 flex items-center justify-between gap-2'>
         <div>
-          <h2 className='text-foreground text-sm font-bold'>{t('Filter')}</h2>
+          <h2 className='text-foreground text-sm font-semibold'>
+            {t('Filter')}
+          </h2>
           <p className='text-muted-foreground mt-1 text-xs'>
             {t('Refine models by provider, group, type, and tags.')}
           </p>
@@ -286,36 +465,13 @@ export function PricingSidebar(props: PricingSidebarProps) {
       )}
 
       <div className='space-y-1'>
-        <FilterSection
-          title={t('Groups')}
-          value={props.groupFilter}
-          options={groupOptions}
-          onChange={props.onGroupChange}
-        />
-        <FilterSection
-          title={t('All Vendors')}
-          value={props.vendorFilter}
-          options={vendorOptions}
-          onChange={props.onVendorChange}
-        />
-        <FilterSection
-          title={t('Model Tags')}
-          value={props.tagFilter}
-          options={tagOptions}
-          onChange={props.onTagChange}
-        />
-        <FilterSection
-          title={t('Pricing Type')}
-          value={props.quotaTypeFilter}
-          options={quotaOptions}
-          onChange={props.onQuotaTypeChange}
-        />
-        <FilterSection
-          title={t('Endpoint Type')}
-          value={props.endpointTypeFilter}
-          options={endpointOptions}
-          onChange={props.onEndpointTypeChange}
-        />
+        {sections.map((section) => (
+          <FilterSection
+            key={section.title}
+            {...section}
+            includeAll={advancedSections.includes(section)}
+          />
+        ))}
       </div>
     </aside>
   )

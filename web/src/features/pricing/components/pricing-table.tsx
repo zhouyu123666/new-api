@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { Row, PaginationState } from '@tanstack/react-table'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -59,6 +59,10 @@ export function PricingTable(props: PricingTableProps) {
     pageIndex: 0,
     pageSize: DEFAULT_PRICING_PAGE_SIZE,
   })
+
+  useEffect(() => {
+    setPagination((current) => ({ ...current, pageIndex: 0 }))
+  }, [models])
 
   const columns = usePricingColumns({
     tokenUnit,

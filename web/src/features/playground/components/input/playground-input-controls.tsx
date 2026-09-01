@@ -24,7 +24,12 @@ import { PromptInputButton } from '@/components/ai-elements/prompt-input'
 import { ModelGroupSelector } from '@/components/model-group-selector'
 
 import { getInputControlState } from '../../lib'
-import type { GroupOption, ModelOption } from '../../types'
+import type {
+  GroupOption,
+  ModelOption,
+  PlaygroundProviderOption,
+} from '../../types'
+import { PlaygroundProviderSelector } from './playground-provider-selector'
 
 type PlaygroundInputControlsProps = {
   disabled?: boolean
@@ -34,8 +39,14 @@ type PlaygroundInputControlsProps = {
   isModelLoading?: boolean
   models: ModelOption[]
   modelValue: string
+  providers: PlaygroundProviderOption[]
+  providerOrder: string[]
+  allowProviderFallbacks: boolean
+  isProviderLoading?: boolean
   onGroupChange: (value: string) => void
   onModelChange: (value: string) => void
+  onProviderOrderChange: (order: string[]) => void
+  onAllowProviderFallbacksChange: (value: boolean) => void
   onStop?: () => void
   text: string
   tools: ReactNode
@@ -49,8 +60,14 @@ export function PlaygroundInputControls({
   isModelLoading = false,
   models,
   modelValue,
+  providers,
+  providerOrder,
+  allowProviderFallbacks,
+  isProviderLoading = false,
   onGroupChange,
   onModelChange,
+  onProviderOrderChange,
+  onAllowProviderFallbacksChange,
   onStop,
   text,
   tools,
@@ -105,8 +122,17 @@ export function PlaygroundInputControls({
 
   return (
     <div className='flex w-full flex-col gap-2.5 md:flex-row md:items-center md:justify-between'>
-      <div className='flex min-w-0 items-center justify-end md:hidden'>
+      <div className='flex min-w-0 items-center justify-end gap-2 md:hidden'>
         {renderSelector()}
+        <PlaygroundProviderSelector
+          providers={providers}
+          providerOrder={providerOrder}
+          allowFallbacks={allowProviderFallbacks}
+          loading={isProviderLoading}
+          disabled={isGenerating}
+          onProviderOrderChange={onProviderOrderChange}
+          onAllowFallbacksChange={onAllowProviderFallbacksChange}
+        />
       </div>
 
       <div className='flex items-center justify-between gap-2 md:justify-start'>
@@ -118,6 +144,15 @@ export function PlaygroundInputControls({
 
       <div className='hidden min-w-0 items-center gap-2 md:flex'>
         {renderSelector()}
+        <PlaygroundProviderSelector
+          providers={providers}
+          providerOrder={providerOrder}
+          allowFallbacks={allowProviderFallbacks}
+          loading={isProviderLoading}
+          disabled={isGenerating}
+          onProviderOrderChange={onProviderOrderChange}
+          onAllowFallbacksChange={onAllowProviderFallbacksChange}
+        />
         {renderSubmitButton()}
       </div>
     </div>

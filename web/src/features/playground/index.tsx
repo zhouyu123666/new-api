@@ -33,9 +33,11 @@ export function Playground() {
     isLoadingMessages,
     models,
     groups,
+    providers,
     updateMessages,
     setModels,
     setGroups,
+    setProviders,
     updateConfig,
     updateParameterEnabled,
     clearMessages,
@@ -66,11 +68,13 @@ export function Playground() {
     clearMessages()
   }
 
-  const { isLoadingModels } = usePlaygroundOptions({
+  const { isLoadingModels, isLoadingProviders } = usePlaygroundOptions({
     currentGroup: config.group,
     currentModel: config.model,
     setGroups,
     setModels,
+    setProviders,
+    providerOrder: config.providerOrder,
     updateConfig,
   })
 
@@ -99,6 +103,10 @@ export function Playground() {
           config={config}
           disabled={isGenerating}
           groups={groups}
+          providers={providers}
+          providerOrder={config.providerOrder}
+          allowProviderFallbacks={config.allowProviderFallbacks}
+          isProviderLoading={isLoadingProviders}
           groupValue={config.group}
           isGenerating={isGenerating}
           isModelLoading={isLoadingModels}
@@ -108,6 +116,12 @@ export function Playground() {
           onConfigChange={updateConfig}
           onClearMessages={handleClearMessages}
           onModelChange={(value) => updateConfig('model', value)}
+          onProviderOrderChange={(value) =>
+            updateConfig('providerOrder', value)
+          }
+          onAllowProviderFallbacksChange={(value) =>
+            updateConfig('allowProviderFallbacks', value)
+          }
           onParameterEnabledChange={updateParameterEnabled}
           onStop={stopGeneration}
           onSubmit={handleSendMessage}

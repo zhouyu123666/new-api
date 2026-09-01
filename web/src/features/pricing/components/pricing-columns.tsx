@@ -39,6 +39,7 @@ import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
 import {
   formatPrice,
+  formatPrimaryProviderPrice,
   formatRequestPrice,
   stripTrailingZeros,
 } from '../lib/price'
@@ -87,7 +88,7 @@ export function usePricingColumns(
         return (
           <div className='flex max-w-full min-w-0 items-center gap-2'>
             {modelIcon}
-            <span className='truncate font-mono text-sm font-medium'>
+            <span className='whitespace-normal font-mono text-sm font-medium break-all'>
               {model.model_name}
             </span>
           </div>
@@ -198,7 +199,7 @@ export function usePricingColumns(
 
         if (isTokenBased) {
           const inputPrice = stripTrailingZeros(
-            formatPrice(
+            formatPrimaryProviderPrice(
               model,
               'input',
               tokenUnit,
@@ -209,7 +210,7 @@ export function usePricingColumns(
             )
           )
           const outputPrice = stripTrailingZeros(
-            formatPrice(
+            formatPrimaryProviderPrice(
               model,
               'output',
               tokenUnit,

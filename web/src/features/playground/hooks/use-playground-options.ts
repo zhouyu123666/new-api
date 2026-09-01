@@ -17,42 +17,31 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-/*
-Copyright (C) 2023-2026 QuantumNous
-
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as
-published by the Free Software Foundation, either version 3 of the
-License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-For commercial licensing, please contact support@quantumnous.com
-*/
 import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { getUserGroups, getUserModels } from '../api'
+import { getUserGroups, getUserModelProviders, getUserModels } from '../api'
 import {
   getGroupFallback,
   getModelFallback,
   getOptionLoadErrorMessage,
   shouldClearModelForGroup,
 } from '../lib'
-import type { GroupOption, ModelOption, PlaygroundConfig } from '../types'
+import type {
+  GroupOption,
+  ModelOption,
+  PlaygroundConfig,
+  PlaygroundProviderOption,
+} from '../types'
 
 type UsePlaygroundOptionsParams = {
   currentGroup: string
   currentModel: string
   setGroups: (groups: GroupOption[]) => void
   setModels: (models: ModelOption[]) => void
+  setProviders: (providers: PlaygroundProviderOption[]) => void
+  providerOrder: string[]
   updateConfig: <K extends keyof PlaygroundConfig>(
     key: K,
     value: PlaygroundConfig[K]
@@ -64,6 +53,8 @@ export function usePlaygroundOptions({
   currentModel,
   setGroups,
   setModels,
+  setProviders,
+  providerOrder,
   updateConfig,
 }: UsePlaygroundOptionsParams) {
   const { t } = useTranslation()
@@ -77,6 +68,17 @@ export function usePlaygroundOptions({
     queryKey: ['playground-models', currentGroup],
     queryFn: () => getUserModels(currentGroup),
     enabled: currentGroup !== '',
+  })
+
+  const {
+    data: providersData,
+    error: providersError,
+    isError: isProvidersError,
+    isLoading: isLoadingProviders,
+  } = useQuery({
+    queryKey: ['playground-providers', currentGroup, currentModel],
+    queryFn: () => getUserModelProviders(currentGroup, currentModel),
+    enabled: currentGroup !== '' && currentModel !== '',
   })
 
   const {
@@ -111,6 +113,17 @@ export function usePlaygroundOptions({
   }, [isGroupsError, groupsError, t])
 
   useEffect(() => {
+    if (!isProvidersError) return
+
+    toast.error(
+      getOptionLoadErrorMessage(
+        providersError,
+        t('Failed to load playground providers')
+      )
+    )
+  }, [isProvidersError, providersError, t])
+
+  useEffect(() => {
     if (!modelsData) return
 
     setModels(modelsData)
@@ -137,7 +150,25 @@ export function usePlaygroundOptions({
     }
   }, [groupsData, currentGroup, setGroups, updateConfig])
 
+  useEffect(() => {
+    setProviders(providersData ?? [])
+  }, [providersData, setProviders])
+
+  useEffect(() => {
+    if (!providersData) return
+    const available = new Set(providersData.map((provider) => provider.slug))
+    const nextOrder = providerOrder.filter((slug) => available.has(slug))
+    if (
+      nextOrder.length === providerOrder.length &&
+      nextOrder.every((slug, index) => slug === providerOrder[index])
+    ) {
+      return
+    }
+    updateConfig('providerOrder', nextOrder)
+  }, [providerOrder, providersData, updateConfig])
+
   return {
     isLoadingModels,
+    isLoadingProviders,
   }
 }

@@ -24,6 +24,7 @@ import {
   Building2,
   AlertCircle,
 } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -40,7 +41,8 @@ import { useModels } from './models-provider'
 
 export function ModelsPrimaryButtons() {
   const { t } = useTranslation()
-  const { setOpen, setCurrentRow } = useModels()
+  const { setOpen, setCurrentRow, setCurrentProvider } = useModels()
+  const navigate = useNavigate()
 
   const handleCreateModel = () => {
     setCurrentRow(null)
@@ -61,6 +63,11 @@ export function ModelsPrimaryButtons() {
 
   const handleManageVendors = () => {
     setOpen('create-vendor') // Will be a separate vendors management dialog
+  }
+
+  const handleManageProviders = () => {
+    setCurrentProvider(null)
+    void navigate({ to: '/models/$section', params: { section: 'providers' } })
   }
 
   return (
@@ -102,6 +109,13 @@ export function ModelsPrimaryButtons() {
 
           <DropdownMenuItem onClick={handleManageVendors}>
             {t('Manage Vendors')}
+            <DropdownMenuShortcut>
+              <Building2 className='h-4 w-4' />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+
+          <DropdownMenuItem onClick={handleManageProviders}>
+            {t('Manage Providers')}
             <DropdownMenuShortcut>
               <Building2 className='h-4 w-4' />
             </DropdownMenuShortcut>
