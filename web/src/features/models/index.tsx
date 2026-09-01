@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQueryClient } from '@tanstack/react-query'
 import { getRouteApi, useNavigate } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -29,6 +29,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { listDeployments } from './api'
 import { DeploymentAccessGuard } from './components/deployment-access-guard'
 import { DeploymentsTable } from './components/deployments-table'
+import { ProvidersTable } from './components/providers-table'
 import { CreateDeploymentDrawer } from './components/dialogs/create-deployment-drawer'
 import { ModelsDialogs } from './components/models-dialogs'
 import { ModelsPrimaryButtons } from './components/models-primary-buttons'
@@ -46,10 +47,13 @@ const route = getRouteApi('/_authenticated/models/$section')
 
 const SECTION_META: Record<ModelsSectionId, { titleKey: string }> = {
   metadata: {
-    titleKey: 'Metadata',
+    titleKey: 'Model List',
   },
   deployments: {
     titleKey: 'Deployments',
+  },
+  providers: {
+    titleKey: 'Providers',
   },
 }
 
@@ -82,20 +86,30 @@ function ModelsContent() {
   )
 
   const meta = SECTION_META[activeSection] ?? SECTION_META.metadata
+  let sectionContent = <DeploymentsSection />
+  if (activeSection === 'metadata') {
+    sectionContent = <ModelsTable />
+  } else if (activeSection === 'providers') {
+    sectionContent = <ProvidersTable />
+  }
+  let sectionActions: ReactNode = null
+  if (activeSection === 'metadata') {
+    sectionActions = <ModelsPrimaryButtons />
+  } else if (activeSection === 'deployments') {
+    sectionActions = (
+      <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
+        <Plus className='h-4 w-4' />
+        {t('Create deployment')}
+      </Button>
+    )
+  }
 
   return (
     <>
       <SectionPageLayout fixedContent>
         <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
         <SectionPageLayout.Actions>
-          {activeSection === 'metadata' ? (
-            <ModelsPrimaryButtons />
-          ) : (
-            <Button onClick={() => setCreateDeploymentOpen(true)} size='sm'>
-              <Plus className='h-4 w-4' />
-              {t('Create deployment')}
-            </Button>
-          )}
+          {sectionActions}
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='flex h-full min-h-0 flex-col gap-4'>
@@ -109,11 +123,7 @@ function ModelsContent() {
               </TabsList>
             </Tabs>
             <div className='min-h-0 flex-1'>
-              {activeSection === 'metadata' ? (
-                <ModelsTable />
-              ) : (
-                <DeploymentsSection />
-              )}
+              {sectionContent}
             </div>
           </div>
         </SectionPageLayout.Content>

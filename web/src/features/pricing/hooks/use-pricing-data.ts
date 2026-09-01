@@ -21,16 +21,42 @@ import { useMemo } from 'react'
 
 import { useStatus } from '@/hooks/use-status'
 
-import { getPricing } from '../api'
+import { getAllModelSquare, getPricing } from '../api'
+import type { ModelSquareData, PricingData } from '../types'
 
-export function usePricingData() {
+type UsePricingDataOptions = {
+  modelSquare?: boolean
+}
+
+export function usePricingData(
+  input: boolean | UsePricingDataOptions = true
+) {
   const { status } = useStatus()
+  const modelSquare =
+    typeof input === 'object' && input.modelSquare === true
+  const enabled = typeof input === 'boolean' ? input : true
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const pricingQuery = useQuery<PricingData>({
     queryKey: ['pricing'],
     queryFn: getPricing,
+    enabled: enabled && !modelSquare,
     staleTime: 5 * 60 * 1000,
   })
+  const modelSquareQuery = useQuery<ModelSquareData>({
+    queryKey: ['model-square'],
+    queryFn: getAllModelSquare,
+    enabled: enabled && modelSquare,
+    staleTime: 5 * 60 * 1000,
+  })
+  const isLoading = modelSquare
+    ? modelSquareQuery.isLoading
+    : pricingQuery.isLoading
+  const error = modelSquare
+    ? modelSquareQuery.error
+    : pricingQuery.error
+  const refetch = modelSquare
+    ? modelSquareQuery.refetch
+    : pricingQuery.refetch
 
   // Ensure rates never reach zero to prevent division errors
   const priceRate = useMemo(
@@ -43,11 +69,14 @@ export function usePricingData() {
   )
 
   const models = useMemo(() => {
-    if (!data?.data || !data?.vendors) return []
+    if (modelSquare) {
+      return modelSquareQuery.data?.data.items ?? []
+    }
+    if (!pricingQuery.data?.data || !pricingQuery.data?.vendors) return []
 
-    const vendorMap = new Map(data.vendors.map((v) => [v.id, v]))
+    const vendorMap = new Map(pricingQuery.data.vendors.map((v) => [v.id, v]))
 
-    return data.data.map((model) => {
+    return pricingQuery.data.data.map((model) => {
       const vendor = model.vendor_id
         ? vendorMap.get(model.vendor_id)
         : undefined
@@ -57,22 +86,75 @@ export function usePricingData() {
         vendor_name: vendor?.name,
         vendor_icon: vendor?.icon,
         vendor_description: vendor?.description,
-        group_ratio: data.group_ratio,
+        group_ratio: pricingQuery.data.group_ratio,
       }
     })
-  }, [data])
+  }, [modelSquareQuery.data, modelSquare, pricingQuery.data])
+
+  const modelSquareVendors = useMemo(() => {
+    if (!modelSquare) return []
+    const seen = new Map<number, { id: number; name: string; icon?: string }>()
+    for (const model of models) {
+      if (!model.vendor_id || !model.vendor_name || seen.has(model.vendor_id)) {
+        continue
+      }
+      seen.set(model.vendor_id, {
+        id: model.vendor_id,
+        name: model.vendor_name,
+        icon: model.vendor_icon,
+      })
+    }
+    return [...seen.values()]
+  }, [models, modelSquare])
+
+  const modelSquareGroups = useMemo(() => {
+    if (!modelSquare) return {}
+    const groups: Record<string, { desc: string; ratio: number }> = {}
+    for (const model of models) {
+      for (const group of model.enable_groups || []) {
+        groups[group] ??= { desc: '', ratio: 1 }
+      }
+    }
+    return groups
+  }, [models, modelSquare])
+
+  const modelSquareEndpoints = useMemo(() => {
+    if (!modelSquare) return {}
+    const endpoints: Record<string, string> = {}
+    for (const model of models) {
+      for (const endpoint of model.supported_endpoint_types || []) {
+        endpoints[endpoint] = endpoint
+      }
+    }
+    return endpoints
+  }, [models, modelSquare])
 
   return {
     models,
-    vendors: data?.vendors ?? [],
-    groupRatio: data?.group_ratio ?? {},
-    usableGroup: data?.usable_group ?? {},
-    endpointMap: data?.supported_endpoint ?? {},
-    autoGroups: data?.auto_groups ?? [],
+    vendors: modelSquare
+      ? modelSquareVendors
+      : (pricingQuery.data?.vendors ?? []),
+    groupRatio: modelSquare
+      ? Object.fromEntries(
+          Object.keys(modelSquareGroups).map((group) => [group, 1])
+        )
+      : (pricingQuery.data?.group_ratio ?? {}),
+    usableGroup: modelSquare
+      ? modelSquareGroups
+      : (pricingQuery.data?.usable_group ?? {}),
+    endpointMap: modelSquare
+      ? modelSquareEndpoints
+      : (pricingQuery.data?.supported_endpoint ?? {}),
+    autoGroups: modelSquare
+      ? []
+      : (pricingQuery.data?.auto_groups ?? []),
     isLoading,
     error,
     refetch,
     priceRate,
     usdExchangeRate,
+    modelSquareTotal: modelSquareQuery.data?.data.total ?? 0,
+    modelSquareOffset: modelSquareQuery.data?.data.offset ?? 0,
+    modelSquareLimit: modelSquareQuery.data?.data.limit ?? 24,
   }
 }

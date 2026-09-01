@@ -5,18 +5,45 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/gin-gonic/gin"
 )
 
+func GetChannelConstraints(c *gin.Context) *dto.ChannelConstraints {
+	if c == nil {
+		return &dto.ChannelConstraints{}
+	}
+	if existing, ok := common.GetContextKeyType[*dto.ChannelConstraints](c, constant.ContextKeyChannelConstraints); ok && existing != nil {
+		return existing
+	}
+	constraints := &dto.ChannelConstraints{}
+	common.SetContextKey(c, constant.ContextKeyChannelConstraints, constraints)
+	return constraints
+}
+
+func AppendTaskPluginIdentityFilter(c *gin.Context, pluginKey string) {
+	if c == nil {
+		return
+	}
+	GetChannelConstraints(c).AddFilter(dto.ChannelFilter{
+		Kind:                   dto.FilterTaskPluginIdentity,
+		TaskPluginKey:          pluginKey,
+		TaskPluginChannelTypes: pinnedTaskPluginChannelTypes(c, pluginKey),
+	})
+}
+
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	RequestPath  string
-	Retry        *int
-	resetNextTry bool
+	Ctx                *gin.Context
+	TokenGroup         string
+	ModelName          string
+	RequestPath        string
+	ProviderRouting    *model.ProviderRouting
+	Retry              *int
+	ExcludedChannelIDs map[int]struct{}
+	resetNextTry       bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -43,6 +70,18 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+// ExcludeChannel records a failed channel for this request so provider
+// routing can select another internal channel on the next retry.
+func (p *RetryParam) ExcludeChannel(channelID int) {
+	if channelID <= 0 {
+		return
+	}
+	if p.ExcludedChannelIDs == nil {
+		p.ExcludedChannelIDs = make(map[int]struct{})
+	}
+	p.ExcludedChannelIDs[channelID] = struct{}{}
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -85,6 +124,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	providerRouting := param.ProviderRouting.Normalized()
+	filters := GetChannelConstraints(param.Ctx).Filters
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
@@ -115,7 +156,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			channel, _ = getChannelForRouting(autoGroup, param.ModelName, param.RequestPath, priorityRetry, providerRouting, param.ExcludedChannelIDs, filters)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,10 +194,115 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		channel, err = getChannelForRouting(param.TokenGroup, param.ModelName, param.RequestPath, param.GetRetry(), providerRouting, param.ExcludedChannelIDs, filters)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+func getChannelForRouting(group, modelName, requestPath string, retry int, routing *model.ProviderRouting, excluded map[int]struct{}, filters []dto.ChannelFilter) (*model.Channel, error) {
+	if routing == nil {
+		return model.GetRandomSatisfiedChannel(group, modelName, retry, filters)
+	}
+
+	available, err := model.GetAvailableProviderSlugsWithFilters(group, modelName, requestPath, filters)
+	if err != nil {
+		return nil, err
+	}
+	availableSet := make(map[string]struct{}, len(available))
+	for _, provider := range available {
+		availableSet[provider] = struct{}{}
+	}
+	providers := make([]string, 0, len(routing.Order)+len(available))
+	seen := make(map[string]struct{}, len(routing.Order)+len(available))
+	for _, provider := range routing.Order {
+		if _, exists := availableSet[provider]; !exists {
+			continue
+		}
+		providers = append(providers, provider)
+		seen[provider] = struct{}{}
+	}
+	if len(providers) == 0 && !routing.AllowFallbacks {
+		return nil, nil
+	}
+	if routing.AllowFallbacks {
+		for _, provider := range available {
+			if _, exists := seen[provider]; exists {
+				continue
+			}
+			providers = append(providers, provider)
+		}
+	}
+	for _, provider := range providers {
+		channel, err := model.GetRandomSatisfiedChannelForProviderExcludingWithFilters(
+			group,
+			modelName,
+			requestPath,
+			provider,
+			excluded,
+			filters,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if channel != nil {
+			return channel, nil
+		}
+	}
+	return nil, nil
+}
+
+func pinnedTaskPluginChannelTypes(c *gin.Context, expected string) []int {
+	if c == nil || expected == "" {
+		return nil
+	}
+	if value, exists := c.Get(jsplugin.ContextKeyPinnedEndpoint); exists {
+		pinned, ok := value.(jsplugin.PinnedEndpoint)
+		if ok && pinned.Generation != nil && len(pinned.Candidates) > 1 {
+			expectedFound := false
+			channelTypes := make([]int, 0, len(pinned.Candidates))
+			seen := make(map[int]struct{}, len(pinned.Candidates))
+			for _, candidate := range pinned.Candidates {
+				if candidate.Plugin == nil {
+					continue
+				}
+				if candidate.Plugin.Meta.Key == expected {
+					expectedFound = true
+				}
+				for _, channelType := range candidate.Plugin.Meta.ChannelTypes {
+					if channelType == 0 || channelType == constant.ChannelTypeTaskPlugin {
+						continue
+					}
+					if _, duplicate := seen[channelType]; duplicate {
+						continue
+					}
+					if plugin, indexed := pinned.Generation.GetByChannelType(channelType); indexed && plugin == candidate.Plugin {
+						seen[channelType] = struct{}{}
+						channelTypes = append(channelTypes, channelType)
+					}
+				}
+			}
+			if expectedFound {
+				return channelTypes
+			}
+		}
+	}
+	value, exists := c.Get(jsplugin.ContextKeyPinnedPlugin)
+	pinned, ok := value.(jsplugin.PinnedPlugin)
+	if !exists || !ok || pinned.Generation == nil || pinned.Plugin == nil || pinned.Plugin.Meta.Key != expected {
+		return nil
+	}
+	channelTypes := make([]int, 0, len(pinned.Plugin.Meta.ChannelTypes))
+	for _, channelType := range pinned.Plugin.Meta.ChannelTypes {
+		if channelType == 0 || channelType == constant.ChannelTypeTaskPlugin {
+			continue
+		}
+		channelTypes = append(channelTypes, channelType)
+	}
+	if len(channelTypes) == 0 {
+		return nil
+	}
+	return channelTypes
 }

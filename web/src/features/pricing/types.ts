@@ -27,6 +27,72 @@ export type PricingVendor = {
   description?: string
 }
 
+export type BillingUsageUnit = 'second' | 'count' | 'token' | 'credit'
+
+export type BillingUsageFieldSchema = {
+  type?: 'number' | 'boolean'
+  unit?: BillingUsageUnit
+  enum?: string[]
+  description?: string | Record<string, string>
+}
+
+export type BillingUsageSchema = Record<string, BillingUsageFieldSchema>
+
+export type BillingUsageExample = {
+  label: string
+  facts: Record<string, string | number>
+}
+
+export type PricingProvider = {
+  slug: string
+  name: string
+  icon?: string
+  website_url?: string
+  status_page_url?: string
+  available: boolean
+  pricing?: {
+    input_price: number
+    output_price: number
+    cache_read_price?: number | null
+    cache_write_price?: number | null
+    source: string
+  }
+  metadata?: PricingProviderMetadata
+}
+
+export type PricingProviderMetadata = {
+  model_name?: string
+  context_length?: number
+  max_output_tokens?: number
+  region?: string
+  precision?: string
+  quantization?: string
+  supported_parameters?: string[]
+  stream_cancellation?: boolean | null
+  free?: boolean | null
+  batch?: boolean | null
+  source_url?: string
+  effective_at?: number
+}
+
+export type ModelSquareProviderDetail = {
+  model: PricingModel
+  provider: PricingProvider
+  groups: string[]
+  endpoints: string[]
+}
+
+export type ModelSquareData = {
+  success: boolean
+  message?: string
+  data: {
+    items: PricingModel[]
+    total: number
+    offset?: number
+    limit?: number
+  }
+}
+
 export type PricingModel = {
   id: number
   model_name: string
@@ -48,12 +114,17 @@ export type PricingModel = {
   enable_groups: string[]
   tags?: string
   supported_endpoint_types?: string[]
+  endpoint_map?: Record<string, { path?: string; method?: string }>
   key?: string
   group_ratio?: Record<string, number>
   /** Billing mode (e.g. "tiered_expr") used to flag dynamic pricing */
   billing_mode?: string
   /** Raw expression describing dynamic / tiered billing */
   billing_expr?: string
+  /** Task-plugin usage facts and their billing units. */
+  billing_usage_schema?: BillingUsageSchema
+  /** Display-only labeled usage vectors for pricing examples. */
+  billing_usage_examples?: BillingUsageExample[]
   /** Pricing version returned by backend, useful for cache busting */
   pricing_version?: string
   /**
@@ -64,6 +135,7 @@ export type PricingModel = {
   max_output_tokens?: number
   knowledge_cutoff?: string
   release_date?: string
+  providers?: PricingProvider[]
   parameter_count?: string
   input_modalities?: Modality[]
   output_modalities?: Modality[]

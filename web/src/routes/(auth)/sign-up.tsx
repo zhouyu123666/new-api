@@ -28,7 +28,7 @@ export const Route = createFileRoute('/(auth)/sign-up')({
 
     // 如果已经有用户信息，说明已登录，注册页对其无意义，跳转到 dashboard
     if (auth.user) {
-      throw redirect({ to: '/dashboard' })
+      throw redirect({ to: '/model-square' })
     }
   },
 })

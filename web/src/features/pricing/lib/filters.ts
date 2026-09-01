@@ -23,7 +23,152 @@ import {
   QUOTA_TYPE_VALUES,
   ENDPOINT_TYPES,
 } from '../constants'
-import type { PricingModel } from '../types'
+import { hasTaskUsageSchema } from './dynamic-price'
+import type { PricingModel, PricingProvider } from '../types'
+
+export type PricingAdvancedFilters = {
+  contextLength: string
+  parameterCount: string
+  releaseDate: string
+  free: string
+  batch: string
+  region: string
+  quantization: string
+}
+
+const RANGE_LIMITS = [8192, 32768, 131072]
+
+function parseParameterCount(value?: string): number | null {
+  if (!value) return null
+  const match = value
+    .trim()
+    .toUpperCase()
+    .match(/([\d.]+)\s*([KMBT])?/)
+  if (!match) return null
+  const amount = Number(match[1])
+  if (!Number.isFinite(amount)) return null
+  const multiplier =
+    { K: 1e3, M: 1e6, B: 1e9, T: 1e12 }[match[2] as 'K' | 'M' | 'B' | 'T'] ?? 1
+  return amount * multiplier
+}
+
+function matchesRange(value: number | null, range: string): boolean {
+  if (value == null || range === FILTER_ALL) return range === FILTER_ALL
+  if (range === 'lte-8k') return value <= RANGE_LIMITS[0]
+  if (range === '8k-32k') {
+    return value > RANGE_LIMITS[0] && value <= RANGE_LIMITS[1]
+  }
+  if (range === '32k-128k') {
+    return value > RANGE_LIMITS[1] && value <= RANGE_LIMITS[2]
+  }
+  if (range === 'gte-128k') return value >= RANGE_LIMITS[2]
+  return true
+}
+
+function filterByRange(
+  models: PricingModel[],
+  range: string,
+  getValue: (model: PricingModel) => number | null
+): PricingModel[] {
+  if (range === FILTER_ALL) return models
+  return models.filter((model) => matchesRange(getValue(model), range))
+}
+
+function filterByParameterRange(
+  models: PricingModel[],
+  range: string
+): PricingModel[] {
+  if (range === FILTER_ALL) return models
+  return models.filter((model) => {
+    const value = parseParameterCount(model.parameter_count)
+    if (value == null) return false
+    if (range === 'lte-10b') return value <= 10e9
+    if (range === '10b-50b') return value > 10e9 && value <= 50e9
+    if (range === '50b-100b') return value > 50e9 && value <= 100e9
+    if (range === 'gte-100b') return value >= 100e9
+    return true
+  })
+}
+
+function getAvailableProviders(model: PricingModel): PricingProvider[] {
+  return (model.providers ?? []).filter((provider) => provider.available)
+}
+
+export function isFreeProvider(provider: PricingProvider): boolean {
+  if (provider.metadata?.free === true) return true
+  return (
+    provider.pricing?.input_price === 0 && provider.pricing?.output_price === 0
+  )
+}
+
+function hasProviderCapability(
+  model: PricingModel,
+  capability: 'free' | 'batch'
+): boolean {
+  return getAvailableProviders(model).some((provider) =>
+    capability === 'free'
+      ? isFreeProvider(provider)
+      : provider.metadata?.batch === true
+  )
+}
+
+function hasProviderValue(
+  model: PricingModel,
+  field: 'region' | 'quantization',
+  value: string
+): boolean {
+  return getAvailableProviders(model).some(
+    (provider) => provider.metadata?.[field] === value
+  )
+}
+
+export function getProviderRegions(models: PricingModel[]): string[] {
+  return collectProviderValues(models, 'region')
+}
+
+export function getProviderQuantizations(models: PricingModel[]): string[] {
+  return collectProviderValues(models, 'quantization')
+}
+
+function collectProviderValues(
+  models: PricingModel[],
+  field: 'region' | 'quantization'
+): string[] {
+  const values = new Set<string>()
+  for (const model of models) {
+    for (const provider of getAvailableProviders(model)) {
+      const value = provider.metadata?.[field]?.trim()
+      if (value) values.add(value)
+    }
+  }
+  return [...values].sort((left, right) => left.localeCompare(right))
+}
+
+export function hasValues(
+  models: PricingModel[],
+  getValues: (model: PricingModel) => unknown
+): boolean {
+  return models.some((model) => {
+    const value = getValues(model)
+    return Array.isArray(value)
+      ? value.length > 0
+      : value != null && value !== ''
+  })
+}
+
+export const ADVANCED_RANGE_OPTIONS = [
+  { value: 'lte-8k', label: '≤ 8K' },
+  { value: '8k-32k', label: '8K–32K' },
+  { value: '32k-128k', label: '32K–128K' },
+  { value: 'gte-128k', label: '≥ 128K' },
+] as const
+
+export const PARAMETER_RANGE_OPTIONS = [
+  { value: 'lte-10b', label: '≤ 10B' },
+  { value: '10b-50b', label: '10B–50B' },
+  { value: '50b-100b', label: '50B–100B' },
+  { value: 'gte-100b', label: '≥ 100B' },
+] as const
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -78,11 +223,17 @@ export function filterByQuotaType(
   quotaType: string
 ): PricingModel[] {
   if (quotaType === QUOTA_TYPES.ALL) return models
+  // Task-usage models form their own bucket, disjoint from token/request.
+  if (quotaType === QUOTA_TYPES.TASK) {
+    return models.filter((m) => hasTaskUsageSchema(m))
+  }
   const targetType =
     quotaType === QUOTA_TYPES.TOKEN
       ? QUOTA_TYPE_VALUES.TOKEN
       : QUOTA_TYPE_VALUES.REQUEST
-  return models.filter((m) => m.quota_type === targetType)
+  return models.filter(
+    (m) => m.quota_type === targetType && !hasTaskUsageSchema(m)
+  )
 }
 
 /**
@@ -183,7 +334,7 @@ export function extractAllTags(models: PricingModel[]): string[] {
     }
   })
 
-  return Array.from(tagSet).sort((a, b) => a.localeCompare(b))
+  return [...tagSet].sort((a, b) => a.localeCompare(b))
 }
 
 /**
@@ -201,4 +352,43 @@ export function filterByTag(
     const modelTags = parseTags(m.tags).map((t) => t.toLowerCase())
     return modelTags.includes(tagLower)
   })
+}
+
+export function filterByAdvanced(
+  models: PricingModel[],
+  filters: PricingAdvancedFilters
+): PricingModel[] {
+  let result = filterByRange(
+    models,
+    filters.contextLength,
+    (model) => model.context_length ?? null
+  )
+  result = filterByParameterRange(result, filters.parameterCount)
+  if (filters.releaseDate !== FILTER_ALL) {
+    const days = Number(filters.releaseDate)
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
+    result = result.filter((model) => {
+      const time = model.release_date
+        ? Date.parse(model.release_date)
+        : Number.NaN
+      return Number.isFinite(time) && time >= cutoff
+    })
+  }
+  if (filters.free !== FILTER_ALL) {
+    result = result.filter((model) => hasProviderCapability(model, 'free'))
+  }
+  if (filters.batch !== FILTER_ALL) {
+    result = result.filter((model) => hasProviderCapability(model, 'batch'))
+  }
+  if (filters.region !== FILTER_ALL) {
+    result = result.filter((model) =>
+      hasProviderValue(model, 'region', filters.region)
+    )
+  }
+  if (filters.quantization !== FILTER_ALL) {
+    result = result.filter((model) =>
+      hasProviderValue(model, 'quantization', filters.quantization)
+    )
+  }
+  return result
 }

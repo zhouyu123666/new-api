@@ -59,6 +59,7 @@ export const STATIC_I18N_KEYS = [
   'All Models',
   'Token-based',
   'Per Request',
+  'Task billing',
   'All Types',
   'Stream Error',
   'Requests with Retries',
@@ -77,6 +78,10 @@ export const STATIC_I18N_KEYS = [
   'All Tags',
   'More...',
   'Less',
+  '≤ 8K',
+  '8K–32K',
+  '32K–128K',
+  '≥ 128K',
 
   // Roles
   'Super Admin',
