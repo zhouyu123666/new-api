@@ -53,6 +53,7 @@ function makeLog(other: LogOtherData): UsageLog {
     completion_tokens: 0,
     use_time: 0,
     is_stream: false,
+    fast_mode: false,
     channel: 1,
     provider_slug: '',
     channel_name: '',
