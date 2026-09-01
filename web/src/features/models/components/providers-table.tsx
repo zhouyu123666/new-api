@@ -219,9 +219,9 @@ function ProviderModelRow(props: {
   onConfigure: () => void
 }) {
   const { t } = useTranslation()
-  const modelIcon = props.item.model_icon
-    ? getLobeIcon(props.item.model_icon, 18)
-    : null
+  const modelIconKey =
+    props.item.model_icon || props.item.vendor_icon || undefined
+  const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 18) : null
   return (
     <tr>
       <td className='px-3 py-2'>

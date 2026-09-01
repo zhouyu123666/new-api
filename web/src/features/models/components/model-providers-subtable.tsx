@@ -21,7 +21,26 @@ import { Pencil, Plus } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import { Button } from '@/components/ui/button'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
+import {
+  sideDrawerContentClassName,
+  sideDrawerHeaderClassName,
+} from '@/components/drawer-layout'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { getLobeIcon } from '@/lib/lobe-icon'
 
@@ -45,11 +64,98 @@ function ProviderPriceCell(props: {
   )
 }
 
+function ProviderConfigAddDrawer(props: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  providers: Provider[]
+  onSelect: (provider: Provider) => void
+}) {
+  const { t } = useTranslation()
+  const [searchValue, setSearchValue] = useState('')
+  const keyword = searchValue.trim().toLowerCase()
+  const candidates = useMemo(
+    () =>
+      props.providers.filter((provider) => {
+        if (!keyword) return true
+        return (
+          provider.display_name.toLowerCase().includes(keyword) ||
+          provider.slug.toLowerCase().includes(keyword)
+        )
+      }),
+    [keyword, props.providers]
+  )
+
+  const handleOpenChange = (open: boolean) => {
+    if (!open) setSearchValue('')
+    props.onOpenChange(open)
+  }
+
+  return (
+    <Sheet open={props.open} onOpenChange={handleOpenChange}>
+      <SheetContent
+        side='right'
+        className={sideDrawerContentClassName('sm:max-w-xl')}
+      >
+        <SheetHeader className={sideDrawerHeaderClassName()}>
+          <SheetTitle>{t('Add provider configuration')}</SheetTitle>
+          <SheetDescription>{t('Select provider')}</SheetDescription>
+        </SheetHeader>
+        <div className='flex min-h-0 flex-1 flex-col gap-3 px-4 pb-6 sm:px-6'>
+          <div className='min-h-0 flex-1 overflow-hidden rounded-lg border'>
+            <Command shouldFilter={false} className='rounded-none'>
+              <CommandInput
+                placeholder={t('Search')}
+                value={searchValue}
+                onValueChange={setSearchValue}
+              />
+              <CommandList className='max-h-full'>
+                <CommandEmpty>{t('No results found')}</CommandEmpty>
+                <CommandGroup>
+                  {candidates.map((provider) => (
+                    <CommandItem
+                      key={provider.slug}
+                      value={provider.slug}
+                      onSelect={() => {
+                        props.onSelect(provider)
+                        handleOpenChange(false)
+                      }}
+                      className='items-center gap-3 rounded-lg px-3 py-2.5'
+                    >
+                      <div className='bg-muted flex size-8 shrink-0 items-center justify-center rounded-md'>
+                        {provider.icon ? (
+                          getLobeIcon(provider.icon, 20)
+                        ) : (
+                          <span className='text-muted-foreground text-xs font-semibold'>
+                            {provider.display_name.charAt(0).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      <div className='min-w-0 flex-1'>
+                        <div className='truncate text-sm font-medium'>
+                          {provider.display_name}
+                        </div>
+                        <div className='text-muted-foreground truncate font-mono text-xs'>
+                          {provider.slug}
+                        </div>
+                      </div>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </div>
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
 export function ModelProvidersSubtable(props: { model: Model }) {
   const { t } = useTranslation()
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(
     null
   )
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
 
   const providersQuery = useQuery({
@@ -98,16 +204,10 @@ export function ModelProvidersSubtable(props: { model: Model }) {
   }
 
   const configuredCount = prices?.length ?? 0
-  const hasUnconfiguredProvider = providers.some(
-    (provider) => !pricesBySlug.has(provider.slug)
+  const unconfiguredProviders = useMemo(
+    () => providers.filter((provider) => !pricesBySlug.has(provider.slug)),
+    [providers, pricesBySlug]
   )
-
-  const openNextProvider = () => {
-    const nextProvider = providers.find(
-      (provider) => !pricesBySlug.has(provider.slug)
-    )
-    if (nextProvider) openProvider(nextProvider)
-  }
 
   return (
     <div className='space-y-2 p-2 sm:p-3'>
@@ -123,8 +223,8 @@ export function ModelProvidersSubtable(props: { model: Model }) {
           size='sm'
           variant='outline'
           className='h-7 gap-1 px-2 text-xs'
-          disabled={!hasUnconfiguredProvider}
-          onClick={openNextProvider}
+          disabled={unconfiguredProviders.length === 0}
+          onClick={() => setProviderPickerOpen(true)}
         >
           <Plus className='size-3.5' />
           {t('Add provider configuration')}
@@ -222,6 +322,12 @@ export function ModelProvidersSubtable(props: { model: Model }) {
         </div>
       )}
 
+      <ProviderConfigAddDrawer
+        open={providerPickerOpen}
+        onOpenChange={setProviderPickerOpen}
+        providers={unconfiguredProviders}
+        onSelect={openProvider}
+      />
       <ModelProviderConfigDrawer
         open={configOpen}
         onOpenChange={(open) => {

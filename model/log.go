@@ -417,10 +417,6 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 			}
 			return resolveLogProviderSlug(c, params.ChannelId)
 		}(),
-		TokenId:  params.TokenId,
-		UseTime:  params.UseTimeSeconds,
-		IsStream: params.IsStream,
-		Group:    params.Group,
 		Ip: func() string {
 			if needRecordIp {
 				return c.ClientIP()
