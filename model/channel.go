@@ -28,6 +28,7 @@ type Channel struct {
 	TestModel          *string `json:"test_model"`
 	Status             int     `json:"status" gorm:"default:1"`
 	Name               string  `json:"name" gorm:"index"`
+	ProviderSlug       string  `json:"provider_slug" gorm:"size:64;index"`
 	Weight             *uint   `json:"weight" gorm:"default:0"`
 	CreatedTime        int64   `json:"created_time" gorm:"bigint"`
 	TestTime           int64   `json:"test_time" gorm:"bigint"`
@@ -162,14 +163,19 @@ func ApplyChannelGroupFilter(query *gorm.DB, group string) *gorm.DB {
 }
 
 // Value implements driver.Valuer interface
+// 必须返回 string 而非 []byte:PG simple protocol 下 []byte 参数按 bytea
+// 编码,写 json 列会触发 SQLSTATE 22P02。
 func (c ChannelInfo) Value() (driver.Value, error) {
-	return common.Marshal(&c)
+	b, err := common.Marshal(&c)
+	if err != nil {
+		return nil, err
+	}
+	return string(b), nil
 }
 
 // Scan implements sql.Scanner interface
 func (c *ChannelInfo) Scan(value interface{}) error {
-	bytesValue, _ := value.([]byte)
-	return common.Unmarshal(bytesValue, c)
+	return common.Unmarshal(jsonScanBytes(value), c)
 }
 
 func (channel *Channel) GetKeys() []string {
@@ -291,6 +297,27 @@ func (channel *Channel) GetModels() []string {
 		return []string{}
 	}
 	return strings.Split(strings.Trim(channel.Models, ","), ",")
+}
+
+// GetProviderSlug returns the configured provider identifier or a stable
+// channel-type fallback for legacy channels without an explicit identifier.
+func (channel *Channel) GetProviderSlug() string {
+	if channel == nil {
+		return ""
+	}
+	if provider := strings.TrimSpace(channel.ProviderSlug); provider != "" {
+		return strings.ToLower(provider)
+	}
+	name := strings.ToLower(strings.TrimSpace(constant.GetChannelTypeName(channel.Type)))
+	var builder strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+		} else if builder.Len() > 0 {
+			builder.WriteByte('-')
+		}
+	}
+	return strings.Trim(builder.String(), "-")
 }
 
 func (channel *Channel) GetGroups() []string {
@@ -419,6 +446,15 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	return channels, nil
 }
 
+// GetChannelById loads a channel directly from the database, bypassing the
+// in-memory channel cache.
+//
+// WARNING: do NOT call this on request hot paths (middleware, distribution,
+// relay submit/retry, polling). Every call is a synchronous DB query and will
+// not see cache-only state. Use CacheGetChannel instead: it serves from the
+// in-memory cache and falls back to this function automatically when
+// MemoryCacheEnabled is false. Direct use is appropriate only where fresh DB
+// state is required, e.g. admin CRUD, channel testing, or cache (re)building.
 func GetChannelById(id int, selectAll bool) (*Channel, error) {
 	channel := &Channel{Id: id}
 	var err error = nil
@@ -448,6 +484,9 @@ func BatchInsertChannels(channels []Channel) error {
 	}()
 
 	for _, chunk := range lo.Chunk(channels, 50) {
+		for i := range chunk {
+			chunk[i].ProviderSlug = normalizeProviderSlug(chunk[i].ProviderSlug)
+		}
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -459,7 +498,13 @@ func BatchInsertChannels(channels []Channel) error {
 			}
 		}
 	}
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	if err := SeedProvidersFromChannels(); err != nil {
+		common.SysError("failed to seed providers after batch channel insert: " + err.Error())
+	}
+	return nil
 }
 
 func BatchDeleteChannels(ids []int) (int64, error) {
@@ -510,7 +555,7 @@ func (channel *Channel) GetBaseURL() string {
 	}
 	url := *channel.BaseURL
 	if url == "" {
-		url = constant.ChannelBaseURLs[channel.Type]
+		url = constant.GetChannelBaseURL(channel.Type)
 	}
 	return url
 }
@@ -530,16 +575,23 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
+	channel.ProviderSlug = normalizeProviderSlug(channel.ProviderSlug)
 	var err error
 	err = DB.Create(channel).Error
 	if err != nil {
 		return err
+	}
+	if channel.ProviderSlug != "" {
+		if err := EnsureProviderBySlug(channel.ProviderSlug); err != nil {
+			common.SysError(fmt.Sprintf("failed to register provider %s: %v", channel.ProviderSlug, err))
+		}
 	}
 	err = channel.AddAbilities(nil)
 	return err
 }
 
 func (channel *Channel) Update() error {
+	channel.ProviderSlug = normalizeProviderSlug(channel.ProviderSlug)
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -582,6 +634,17 @@ func (channel *Channel) Update() error {
 	err = DB.Model(channel).Updates(channel).Error
 	if err != nil {
 		return err
+	}
+	// Updates with a struct skips empty values; explicitly persist an empty
+	// provider slug so administrators can clear a previous association.
+	if err := DB.Model(&Channel{}).Where("id = ?", channel.Id).
+		Update("provider_slug", channel.ProviderSlug).Error; err != nil {
+		return err
+	}
+	if channel.ProviderSlug != "" {
+		if err := EnsureProviderBySlug(channel.ProviderSlug); err != nil {
+			common.SysError(fmt.Sprintf("failed to register provider %s: %v", channel.ProviderSlug, err))
+		}
 	}
 	DB.Model(channel).First(channel, "id = ?", channel.Id)
 	err = channel.UpdateAbilities(nil)

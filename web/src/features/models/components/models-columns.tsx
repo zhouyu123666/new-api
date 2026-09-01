@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { ColumnDef } from '@tanstack/react-table'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { BadgeCell, BadgeListCell } from '@/components/data-table'
@@ -25,6 +26,7 @@ import { ProviderBadge } from '@/components/provider-badge'
 import { StatusBadge } from '@/components/status-badge'
 import { TableId } from '@/components/table-id'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Button } from '@/components/ui/button'
 import {
   Tooltip,
   TooltipContent,
@@ -53,7 +55,13 @@ function getCompactModelIcon(iconKey: string) {
 /**
  * Generate models columns configuration
  */
-export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
+export function useModelsColumns(
+  vendors: Vendor[] = [],
+  options?: {
+    expandedModelIds?: Set<number>
+    onToggleExpand?: (modelId: number) => void
+  }
+): ColumnDef<Model>[] {
   const { t } = useTranslation()
 
   // Get translated configs
@@ -67,6 +75,34 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
   })
 
   return [
+    {
+      id: 'provider_relations',
+      header: () => null,
+      cell: ({ row }) => {
+        const modelId = row.original.id
+        const expanded = options?.expandedModelIds?.has(modelId) ?? false
+        return (
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon'
+            className='size-7'
+            aria-label={t('Expand model providers')}
+            aria-expanded={expanded}
+            onClick={() => options?.onToggleExpand?.(modelId)}
+          >
+            {expanded ? (
+              <ChevronDown className='size-4' />
+            ) : (
+              <ChevronRight className='size-4' />
+            )}
+          </Button>
+        )
+      },
+      enableSorting: false,
+      enableHiding: false,
+      size: 40,
+    },
     // Checkbox column
     {
       id: 'select',
@@ -238,7 +274,7 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
     // Vendor column
     {
       accessorKey: 'vendor_id',
-      header: t('Vendor'),
+      header: t('Model vendor'),
       cell: ({ row }) => {
         const vendorId = row.getValue('vendor_id') as number
         const vendor = vendorMap[vendorId]
