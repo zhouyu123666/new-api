@@ -33,9 +33,9 @@ is the gateway charge in USD (`settled quota / QuotaPerUnit`), not an upstream
 provider invoice. Ratio-based text requests expose an input/output split when it
 is mathematically stable; fixed-price and tiered-expression requests expose a
 total only because a trustworthy split is not available. The same total is also
-available as `new_api.billing.gateway_cost_usd`, with
-`new_api.billing.cost_semantics=gateway_charge_usd`. The internal quota and
-consume log remain authoritative for accounting.
+`new_api.billing.cost_semantics=gateway_charge_usd` identifies this as a
+gateway charge. The internal quota and consume log remain authoritative for
+accounting.
 
 `langfuse.observation.completion_start_time` is emitted for streamed requests
 that have a recorded first response. It follows the existing `RelayInfo`

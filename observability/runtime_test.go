@@ -114,8 +114,14 @@ func TestStartLLMRequestCapturesInputAndUsage(t *testing.T) {
 	require.Len(t, spans, 1)
 	require.Equal(t, int64(3), attributeValue(spans[0].Attributes, "gen_ai.usage.input_tokens").AsInt64())
 	require.Equal(t, int64(5), attributeValue(spans[0].Attributes, "gen_ai.usage.output_tokens").AsInt64())
+	require.Equal(t, int64(8), attributeValue(spans[0].Attributes, "gen_ai.usage.total_tokens").AsInt64())
 	require.Equal(t, int64(42), attributeValue(spans[0].Attributes, "new_api.billing.quota").AsInt64())
 	require.Contains(t, attributeValue(spans[0].Attributes, "gen_ai.input.messages").AsString(), "hello")
+	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.input").AsString())
+	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.output").AsString())
+	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.model.name").AsString())
+	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.usage_details").AsString())
+	require.Equal(t, "", attributeValue(spans[0].Attributes, "new_api.billing.gateway_cost_usd").AsString())
 	require.JSONEq(t, `{"total":0.000084}`, attributeValue(spans[0].Attributes, "langfuse.observation.cost_details").AsString())
 }
 
@@ -170,10 +176,29 @@ func TestNestedAttemptUsageAndTTFTStayOnGenerationSpan(t *testing.T) {
 	require.Equal(t, int64(10), attributeValue(generation.Attributes, "gen_ai.usage.input_tokens").AsInt64())
 	require.JSONEq(t, `{"input":0.001,"output":0.002,"total":0.003}`, attributeValue(generation.Attributes, "langfuse.observation.cost_details").AsString())
 	require.Equal(t, "gateway_charge_usd", attributeValue(generation.Attributes, "new_api.billing.cost_semantics").AsString())
-	require.InDelta(t, 0.003, attributeValue(generation.Attributes, "new_api.billing.gateway_cost_usd").AsFloat64(), 1e-12)
+	require.Equal(t, "", attributeValue(generation.Attributes, "new_api.billing.gateway_cost_usd").AsString())
 	require.Equal(t, "", attributeValue(attempt.Attributes, "langfuse.observation.cost_details").AsString())
 	require.Equal(t, firstResponse.Format(time.RFC3339Nano), attributeValue(generation.Attributes, "langfuse.observation.completion_start_time").AsString())
 	require.Equal(t, int64(175), attributeValue(generation.Attributes, "new_api.ttft_ms").AsInt64())
+}
+
+func TestStartStreamDoesNotDuplicateStreamMarker(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:        true,
+		tracerProvider: provider,
+		tracer:         provider.Tracer("test"),
+		propagator:     propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	_, span := runtime.StartStream(context.Background(), nil)
+	runtime.FinishSpan(span, nil)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.Equal(t, "", attributeValue(spans[0].Attributes, "new_api.stream.is_stream").AsString())
 }
 
 func TestFinishLLMDoesNotSetTTFTWithoutResponse(t *testing.T) {

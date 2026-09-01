@@ -188,7 +188,6 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 		attribute.String("gen_ai.operation.name", "chat"),
 		attribute.String("gen_ai.request.model", info.OriginModelName),
 		attribute.String("langfuse.observation.type", "generation"),
-		attribute.String("langfuse.observation.model.name", info.OriginModelName),
 		attribute.String("new_api.request_id", info.RequestId),
 		attribute.String("new_api.relay_format", string(info.RelayFormat)),
 		attribute.Bool("new_api.request.stream", info.IsStream),
@@ -249,7 +248,6 @@ func (r *Runtime) StartStream(ctx context.Context, info *relaycommon.RelayInfo) 
 		return ctx, trace.SpanFromContext(ctx)
 	}
 	ctx, span := r.tracer.Start(ctx, streamSpanName, trace.WithSpanKind(trace.SpanKindInternal))
-	span.SetAttributes(attribute.Bool("new_api.stream.is_stream", true))
 	return ctx, span
 }
 
@@ -308,17 +306,9 @@ func (r *Runtime) recordUsage(ctx context.Context, promptTokens, completionToken
 		attribute.Float64("new_api.billing.model_price", modelPrice),
 		attribute.Bool("new_api.billing.use_price", usePrice),
 	)
-	if usage, err := common.Marshal(map[string]int{
-		"input":  promptTokens,
-		"output": completionTokens,
-		"total":  totalTokens,
-	}); err == nil {
-		span.SetAttributes(attribute.String("langfuse.observation.usage_details", string(usage)))
-	}
 	if costs != nil {
 		span.SetAttributes(
 			attribute.String("new_api.billing.cost_semantics", "gateway_charge_usd"),
-			attribute.Float64("new_api.billing.gateway_cost_usd", costs.TotalUSD),
 		)
 		costDetails := map[string]float64{"total": costs.TotalUSD}
 		if costs.InputUSD != nil {
@@ -331,11 +321,7 @@ func (r *Runtime) recordUsage(ctx context.Context, promptTokens, completionToken
 			span.SetAttributes(attribute.String("langfuse.observation.cost_details", string(cost)))
 		}
 	} else if quota > 0 && common.QuotaPerUnit > 0 && !math.IsNaN(common.QuotaPerUnit) && !math.IsInf(common.QuotaPerUnit, 0) {
-		gatewayCostUSD := float64(quota) / common.QuotaPerUnit
-		span.SetAttributes(
-			attribute.String("new_api.billing.cost_semantics", "gateway_charge_usd"),
-			attribute.Float64("new_api.billing.gateway_cost_usd", gatewayCostUSD),
-		)
+		span.SetAttributes(attribute.String("new_api.billing.cost_semantics", "gateway_charge_usd"))
 		// The settled quota is the only value that includes group, request,
 		// tool, cache, and other multipliers consistently across billing modes.
 		// Keep a total-only fallback for callers that do not have a reliable
@@ -412,13 +398,11 @@ func (r *Runtime) FinishLLM(ctx context.Context, span trace.Span, err error, inf
 		if state.input.Len() > 0 {
 			span.SetAttributes(
 				attribute.String("gen_ai.input.messages", state.input.String()),
-				attribute.String("langfuse.observation.input", state.input.String()),
 			)
 		}
 		if state.output.Len() > 0 {
 			span.SetAttributes(
 				attribute.String("gen_ai.output.messages", state.output.String()),
-				attribute.String("langfuse.observation.output", state.output.String()),
 			)
 		}
 		state.mu.Unlock()
