@@ -161,10 +161,14 @@ export function ModelProvidersSubtable(props: { model: Model }) {
   const providersQuery = useQuery({
     queryKey: providersQueryKeys.list({ all: true }),
     queryFn: getAllProviders,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const pricesQuery = useQuery({
     queryKey: modelProviderPriceQueryKeys.list(props.model.id),
     queryFn: () => getModelProviderPrices(props.model.id),
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
 
   const providers = providersQuery.data ?? EMPTY_PROVIDERS

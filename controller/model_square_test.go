@@ -43,6 +43,7 @@ func setupModelSquareControllerTest(t *testing.T) *gorm.DB {
 
 func TestGetModelSquareSupportsPagination(t *testing.T) {
 	db := setupModelSquareControllerTest(t)
+	seedModelSquareProvider(t, db)
 	for index := 1; index <= 3; index++ {
 		require.NoError(t, db.Create(&model.Model{
 			Id:        index,
@@ -50,6 +51,7 @@ func TestGetModelSquareSupportsPagination(t *testing.T) {
 			Status:    1,
 			NameRule:  model.NameRuleExact,
 		}).Error)
+		seedModelSquarePrice(t, db, index)
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -60,29 +62,26 @@ func TestGetModelSquareSupportsPagination(t *testing.T) {
 	GetModelSquare(context)
 
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.JSONEq(t, `{
-		"success": true,
-		"data": {
-			"items": [{
-				"id": 2,
-				"model_name": "catalog-model-2",
-				"catalog_slug": "catalog-model-2",
-				"quota_type": 0,
-				"model_ratio": 0,
-				"model_price": 0,
-				"completion_ratio": 0,
-				"enable_groups": [],
-				"supported_endpoint_types": []
-			}],
-			"total": 3,
-			"offset": 1,
-			"limit": 1
-		}
-	}`, recorder.Body.String())
+	var response struct {
+		Data struct {
+			Items  []modelSquareItem `json:"items"`
+			Total  int64              `json:"total"`
+			Offset int                `json:"offset"`
+			Limit  int                `json:"limit"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Len(t, response.Data.Items, 1)
+	assert.Equal(t, 2, response.Data.Items[0].ID)
+	assert.Equal(t, "catalog-model-2", response.Data.Items[0].ModelName)
+	assert.Equal(t, int64(3), response.Data.Total)
+	assert.Equal(t, 1, response.Data.Offset)
+	assert.Equal(t, 1, response.Data.Limit)
 }
 
 func TestGetModelSquareUsesDefaultPageSize(t *testing.T) {
 	db := setupModelSquareControllerTest(t)
+	seedModelSquareProvider(t, db)
 	for index := 1; index <= 25; index++ {
 		require.NoError(t, db.Create(&model.Model{
 			Id:        index,
@@ -90,6 +89,7 @@ func TestGetModelSquareUsesDefaultPageSize(t *testing.T) {
 			Status:    1,
 			NameRule:  model.NameRuleExact,
 		}).Error)
+		seedModelSquarePrice(t, db, index)
 	}
 
 	gin.SetMode(gin.TestMode)
@@ -102,7 +102,7 @@ func TestGetModelSquareUsesDefaultPageSize(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	var response struct {
 		Data struct {
-			Items  []model.Model `json:"items"`
+			Items  []modelSquareItem `json:"items"`
 			Total  int64         `json:"total"`
 			Offset int           `json:"offset"`
 			Limit  int           `json:"limit"`
@@ -115,7 +115,82 @@ func TestGetModelSquareUsesDefaultPageSize(t *testing.T) {
 	assert.Equal(t, 24, response.Data.Limit)
 }
 
-func TestModelSquareUsesChannelProvidersAndExplicitPrices(t *testing.T) {
+func TestGetModelSquareExcludesModelsWithoutProviderConfiguration(t *testing.T) {
+	db := setupModelSquareControllerTest(t)
+	require.NoError(t, db.Create(&model.Model{
+		Id:        1,
+		ModelName: "channel-only-model",
+		Status:    1,
+		NameRule:  model.NameRuleExact,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/model-square", nil)
+
+	GetModelSquare(context)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Data struct {
+			Items []modelSquareItem `json:"items"`
+			Total int64              `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Empty(t, response.Data.Items)
+	assert.Zero(t, response.Data.Total)
+}
+
+func TestGetModelSquareDetailExcludesModelsWithoutProviderConfiguration(t *testing.T) {
+	db := setupModelSquareControllerTest(t)
+	require.NoError(t, db.Create(&model.Model{
+		Id:        1,
+		ModelName: "channel-only-detail-model",
+		Status:    1,
+		NameRule:  model.NameRuleExact,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Params = gin.Params{{Key: "id", Value: "1"}}
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/model-square/1", nil)
+
+	GetModelSquareDetail(context)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.False(t, response.Success)
+	assert.Equal(t, "model not found", response.Message)
+}
+
+func seedModelSquareProvider(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.Provider{
+		Id:          1,
+		Slug:        "test-provider",
+		DisplayName: "Test Provider",
+		Status:      1,
+	}).Error)
+}
+
+func seedModelSquarePrice(t *testing.T, db *gorm.DB, modelID int) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.ModelProviderPrice{
+		ModelId:      modelID,
+		ProviderSlug: "test-provider",
+		InputPrice:   1,
+		OutputPrice:  2,
+	}).Error)
+}
+
+func TestModelSquareUsesOnlyExplicitProviderPrices(t *testing.T) {
 	item := modelSquareItemFromModel(
 		&model.Model{Id: 1, ModelName: "gpt-test"},
 		map[string]model.Pricing{
@@ -149,12 +224,12 @@ func TestModelSquareUsesChannelProvidersAndExplicitPrices(t *testing.T) {
 		},
 	)
 
-	require.Len(t, item.Providers, 2)
-	assert.Equal(t, "deepseek", item.Providers[0].Slug)
-	assert.Nil(t, item.Providers[0].Pricing)
-	assert.Equal(t, "siliconflow", item.Providers[1].Slug)
-	assert.NotNil(t, item.Providers[1].Pricing)
-	assert.Equal(t, float64(1), item.Providers[1].Pricing.InputPrice)
+	require.Len(t, item.Providers, 1)
+	assert.Equal(t, "siliconflow", item.Providers[0].Slug)
+	assert.Equal(t, "SiliconFlow", item.Providers[0].Name)
+	assert.True(t, item.Providers[0].Available)
+	require.NotNil(t, item.Providers[0].Pricing)
+	assert.Equal(t, float64(1), item.Providers[0].Pricing.InputPrice)
 }
 
 func TestModelSquareProviderNameFallsBackWhenMetadataNameIsEmpty(t *testing.T) {
@@ -168,7 +243,14 @@ func TestModelSquareProviderNameFallsBackWhenMetadataNameIsEmpty(t *testing.T) {
 			},
 		},
 		map[int]model.Vendor{},
-		map[string]model.ModelProviderPrice{},
+		map[string]model.ModelProviderPrice{
+			"provider-slug": {
+				ModelId:      1,
+				ProviderSlug: "provider-slug",
+				InputPrice:   1,
+				OutputPrice:  2,
+			},
+		},
 		map[string]model.Provider{
 			"provider-slug": {Slug: "provider-slug", DisplayName: "", Status: 1},
 		},

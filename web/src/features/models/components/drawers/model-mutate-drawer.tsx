@@ -80,6 +80,7 @@ import { useUpdateOption } from '@/features/system-settings/hooks/use-update-opt
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
 import type { ModelSettings } from '@/features/system-settings/types'
 import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
+import { invalidateModelSquareQueries } from '@/features/pricing/lib/query-keys'
 
 import { createModel, updateModel, getModel, getVendors } from '../../api'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
@@ -720,6 +721,7 @@ export function ModelMutateDrawer({
           )
           queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
           queryClient.invalidateQueries({ queryKey: ['system-options'] })
+          await invalidateModelSquareQueries(queryClient)
           onOpenChange(false)
         } else {
           toast.error(response.message || 'Operation failed')
