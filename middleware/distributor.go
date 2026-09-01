@@ -56,8 +56,6 @@ func Distribute() func(c *gin.Context) {
 			common.SetContextKey(c, constant.ContextKeyProviderRouting, routing)
 			modelRequest.ProviderRouting = routing
 		}
-		if ok {
-			id, err := strconv.Atoi(channelId.(string))
 		if pin, found, overridden := constraints.ResolvedPin(); found {
 			for _, lost := range overridden {
 				logger.LogWarn(c, fmt.Sprintf(
@@ -149,8 +147,11 @@ func Distribute() func(c *gin.Context) {
 					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 						affinityUsable := false
 						preferred, err := model.CacheGetChannel(preferredChannelID)
-						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+						affinitySatisfied := false
+						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled {
+							affinitySatisfied, _ = model.ChannelSatisfiesFilters(preferred, modelRequest.Model, constraints.Filters)
+						}
+						if affinitySatisfied {
 							if usingGroup == "auto" {
 								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 								autoGroups := service.GetRequestAutoGroups(c, userGroup)
@@ -174,36 +175,6 @@ func Distribute() func(c *gin.Context) {
 						if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
 							service.ClearCurrentChannelAffinityCache(c)
 						}
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
-					affinityUsable := false
-					preferred, err := model.CacheGetChannel(preferredChannelID)
-					affinitySatisfied := false
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled {
-						affinitySatisfied, _ = model.ChannelSatisfiesFilters(preferred, modelRequest.Model, constraints.Filters)
-					}
-					if affinitySatisfied {
-						if usingGroup == "auto" {
-							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-							autoGroups := service.GetRequestAutoGroups(c, userGroup)
-							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
-									selectGroup = g
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
-									channel = preferred
-									affinityUsable = true
-									service.MarkChannelAffinityUsed(c, g, preferred.Id)
-									break
-								}
-							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
-							channel = preferred
-							selectGroup = usingGroup
-							affinityUsable = true
-							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
-						}
-					}
-					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
-						service.ClearCurrentChannelAffinityCache(c)
 					}
 				}
 
@@ -255,7 +226,6 @@ func Distribute() func(c *gin.Context) {
 	}
 }
 
-func channelMatchesExpectedTaskPlugin(c *gin.Context, channel *model.Channel, expected string) bool {
 func providerRoutingAllowsChannel(routing *model.ProviderRouting, channel *model.Channel) bool {
 	if routing == nil || channel == nil {
 		return routing == nil
@@ -269,10 +239,7 @@ func providerRoutingAllowsChannel(routing *model.ProviderRouting, channel *model
 	return false
 }
 
-// channelSupportsRequestPath reports whether a channel can serve the request path.
-// Only Advanced Custom (type 58) channels are path-checked; all other channel types
-// always pass. A type-58 channel is usable only when one of its routes matches.
-func channelSupportsRequestPath(channel *model.Channel, requestPath string, requestModel string) bool {
+func channelMatchesExpectedTaskPlugin(c *gin.Context, channel *model.Channel, expected string) bool {
 	if channel == nil {
 		return false
 	}
@@ -287,7 +254,6 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 	if expected == "" {
 		return true
 	}
-
 	if c == nil {
 		return false
 	}
@@ -298,6 +264,20 @@ func channelSupportsRequestPath(channel *model.Channel, requestPath string, requ
 	}
 	plugin, ok := pinned.Generation.GetByChannelType(channel.Type)
 	return ok && plugin == pinned.Plugin
+}
+
+// channelSupportsRequestPath reports whether a channel can serve the request path.
+// Only Advanced Custom (type 58) channels are path-checked; all other channel types
+// always pass. A type-58 channel is usable only when one of its routes matches.
+func channelSupportsRequestPath(channel *model.Channel, requestPath string, requestModel string) bool {
+	if channel == nil {
+		return false
+	}
+	if channel.Type != constant.ChannelTypeAdvancedCustom {
+		return true
+	}
+	config := channel.GetOtherSettings().AdvancedCustom
+	return config != nil && config.SupportsPathForModel(requestPath, requestModel)
 }
 
 func pinnedEndpointCandidateForChannel(c *gin.Context, channel *model.Channel, expected string) (jsplugin.ProtocolBinding, bool) {

@@ -24,32 +24,37 @@ import { useStatus } from '@/hooks/use-status'
 import { getAllModelSquare, getPricing } from '../api'
 import type { ModelSquareData, PricingData } from '../types'
 
-export function usePricingData(enabled = true) {
-export function usePricingData(options?: {
+type UsePricingDataOptions = {
   modelSquare?: boolean
-}) {
+}
+
+export function usePricingData(
+  input: boolean | UsePricingDataOptions = true
+) {
   const { status } = useStatus()
+  const modelSquare =
+    typeof input === 'object' && input.modelSquare === true
+  const enabled = typeof input === 'boolean' ? input : true
 
   const pricingQuery = useQuery<PricingData>({
     queryKey: ['pricing'],
     queryFn: getPricing,
-    enabled: options?.modelSquare !== true,
+    enabled: enabled && !modelSquare,
     staleTime: 5 * 60 * 1000,
-    enabled,
   })
   const modelSquareQuery = useQuery<ModelSquareData>({
     queryKey: ['model-square'],
     queryFn: getAllModelSquare,
-    enabled: options?.modelSquare === true,
+    enabled: enabled && modelSquare,
     staleTime: 5 * 60 * 1000,
   })
-  const isLoading = options?.modelSquare
+  const isLoading = modelSquare
     ? modelSquareQuery.isLoading
     : pricingQuery.isLoading
-  const error = options?.modelSquare
+  const error = modelSquare
     ? modelSquareQuery.error
     : pricingQuery.error
-  const refetch = options?.modelSquare
+  const refetch = modelSquare
     ? modelSquareQuery.refetch
     : pricingQuery.refetch
 
@@ -64,7 +69,7 @@ export function usePricingData(options?: {
   )
 
   const models = useMemo(() => {
-    if (options?.modelSquare) {
+    if (modelSquare) {
       return modelSquareQuery.data?.data.items ?? []
     }
     if (!pricingQuery.data?.data || !pricingQuery.data?.vendors) return []
@@ -84,10 +89,10 @@ export function usePricingData(options?: {
         group_ratio: pricingQuery.data.group_ratio,
       }
     })
-  }, [modelSquareQuery.data, options?.modelSquare, pricingQuery.data])
+  }, [modelSquareQuery.data, modelSquare, pricingQuery.data])
 
   const modelSquareVendors = useMemo(() => {
-    if (!options?.modelSquare) return []
+    if (!modelSquare) return []
     const seen = new Map<number, { id: number; name: string; icon?: string }>()
     for (const model of models) {
       if (!model.vendor_id || !model.vendor_name || seen.has(model.vendor_id)) {
@@ -100,10 +105,10 @@ export function usePricingData(options?: {
       })
     }
     return [...seen.values()]
-  }, [models, options?.modelSquare])
+  }, [models, modelSquare])
 
   const modelSquareGroups = useMemo(() => {
-    if (!options?.modelSquare) return {}
+    if (!modelSquare) return {}
     const groups: Record<string, { desc: string; ratio: number }> = {}
     for (const model of models) {
       for (const group of model.enable_groups || []) {
@@ -111,10 +116,10 @@ export function usePricingData(options?: {
       }
     }
     return groups
-  }, [models, options?.modelSquare])
+  }, [models, modelSquare])
 
   const modelSquareEndpoints = useMemo(() => {
-    if (!options?.modelSquare) return {}
+    if (!modelSquare) return {}
     const endpoints: Record<string, string> = {}
     for (const model of models) {
       for (const endpoint of model.supported_endpoint_types || []) {
@@ -122,25 +127,25 @@ export function usePricingData(options?: {
       }
     }
     return endpoints
-  }, [models, options?.modelSquare])
+  }, [models, modelSquare])
 
   return {
     models,
-    vendors: options?.modelSquare
+    vendors: modelSquare
       ? modelSquareVendors
       : (pricingQuery.data?.vendors ?? []),
-    groupRatio: options?.modelSquare
+    groupRatio: modelSquare
       ? Object.fromEntries(
           Object.keys(modelSquareGroups).map((group) => [group, 1])
         )
       : (pricingQuery.data?.group_ratio ?? {}),
-    usableGroup: options?.modelSquare
+    usableGroup: modelSquare
       ? modelSquareGroups
       : (pricingQuery.data?.usable_group ?? {}),
-    endpointMap: options?.modelSquare
+    endpointMap: modelSquare
       ? modelSquareEndpoints
       : (pricingQuery.data?.supported_endpoint ?? {}),
-    autoGroups: options?.modelSquare
+    autoGroups: modelSquare
       ? []
       : (pricingQuery.data?.auto_groups ?? []),
     isLoading,

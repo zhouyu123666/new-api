@@ -44,7 +44,6 @@ import {
   type PricingAdvancedFilters,
 } from '../lib/filters'
 import { hasTaskUsageSchema } from '../lib/dynamic-price'
-import { parseTags } from '../lib/filters'
 import type { PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {

@@ -156,13 +156,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(
-				autoGroup,
-				param.ModelName,
-				priorityRetry,
-				filters,
-			)
-			channel, _ = getChannelForRouting(autoGroup, param.ModelName, param.RequestPath, priorityRetry, providerRouting, param.ExcludedChannelIDs)
+			channel, _ = getChannelForRouting(autoGroup, param.ModelName, param.RequestPath, priorityRetry, providerRouting, param.ExcludedChannelIDs, filters)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -200,13 +194,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(
-			param.TokenGroup,
-			param.ModelName,
-			param.GetRetry(),
-			filters,
-		)
-		channel, err = getChannelForRouting(param.TokenGroup, param.ModelName, param.RequestPath, param.GetRetry(), providerRouting, param.ExcludedChannelIDs)
+		channel, err = getChannelForRouting(param.TokenGroup, param.ModelName, param.RequestPath, param.GetRetry(), providerRouting, param.ExcludedChannelIDs, filters)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
@@ -214,12 +202,12 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	return channel, selectGroup, nil
 }
 
-func getChannelForRouting(group, modelName, requestPath string, retry int, routing *model.ProviderRouting, excluded map[int]struct{}) (*model.Channel, error) {
+func getChannelForRouting(group, modelName, requestPath string, retry int, routing *model.ProviderRouting, excluded map[int]struct{}, filters []dto.ChannelFilter) (*model.Channel, error) {
 	if routing == nil {
-		return model.GetRandomSatisfiedChannel(group, modelName, retry, requestPath)
+		return model.GetRandomSatisfiedChannel(group, modelName, retry, filters)
 	}
 
-	available, err := model.GetAvailableProviderSlugs(group, modelName, requestPath)
+	available, err := model.GetAvailableProviderSlugsWithFilters(group, modelName, requestPath, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -248,12 +236,13 @@ func getChannelForRouting(group, modelName, requestPath string, retry int, routi
 		}
 	}
 	for _, provider := range providers {
-		channel, err := model.GetRandomSatisfiedChannelForProviderExcluding(
+		channel, err := model.GetRandomSatisfiedChannelForProviderExcludingWithFilters(
 			group,
 			modelName,
 			requestPath,
 			provider,
 			excluded,
+			filters,
 		)
 		if err != nil {
 			return nil, err

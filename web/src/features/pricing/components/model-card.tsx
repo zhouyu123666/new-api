@@ -74,7 +74,11 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     props.model.billing_mode === 'tiered_expr' &&
     Boolean(props.model.billing_expr)
   const isUnconfiguredTaskUsage = isUnconfiguredTaskUsageModel(props.model)
-  const hasCachedPrice = isTokenBased && props.model.cache_ratio != null
+  const primaryProvider = getPrimaryProvider(props.model)
+  const hasCachedPrice =
+    isTokenBased &&
+    (props.model.cache_ratio != null ||
+      primaryProvider?.pricing?.cache_read_price != null)
   const dynamicPriceOptions = {
     tokenUnit,
     showRechargePrice,
@@ -85,13 +89,6 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       props.selectedGroup
     ),
   }
-  const dynamicSummary = isDynamicPricing
-    ? getDynamicPricingSummary(props.model, dynamicPriceOptions)
-  const primaryProvider = getPrimaryProvider(props.model)
-  const hasCachedPrice =
-    isTokenBased &&
-    (props.model.cache_ratio != null ||
-      primaryProvider?.pricing?.cache_read_price != null)
   const dynamicSummary = isDynamicPricing
     ? getDynamicPricingSummary(props.model, {
         tokenUnit,

@@ -70,7 +70,7 @@ func TestGetChannelForRoutingRetriesWithinProviderBeforeFallback(t *testing.T) {
 		AllowFallbacks:    false,
 		HasAllowFallbacks: true,
 	}
-	first, err := getChannelForRouting("default", "provider-retry-model", "/v1/chat/completions", 0, routing, nil)
+	first, err := getChannelForRouting("default", "provider-retry-model", "/v1/chat/completions", 0, routing, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 
@@ -81,6 +81,7 @@ func TestGetChannelForRoutingRetriesWithinProviderBeforeFallback(t *testing.T) {
 		1,
 		routing,
 		map[int]struct{}{first.Id: {}},
+		nil,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, second)

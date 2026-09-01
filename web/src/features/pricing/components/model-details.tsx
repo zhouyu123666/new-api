@@ -93,7 +93,6 @@ import {
 } from '../lib/dynamic-price'
 import { isFreeProvider, parseTags } from '../lib/filters'
 import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
-import { formatFixedPrice, formatGroupPrice } from '../lib/price'
 import {
   evaluateTaskUsageExamples,
   getTaskEnumFields,

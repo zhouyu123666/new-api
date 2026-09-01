@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -125,7 +126,7 @@ func (routing *ProviderRouting) Normalized() *ProviderRouting {
 	return &ProviderRouting{Order: order, AllowFallbacks: allowFallbacks, HasAllowFallbacks: true}
 }
 
-func providerChannelsFromCache(group, modelName, requestPath string) []*Channel {
+func providerChannelsFromCache(group, modelName, requestPath string, filters []dto.ChannelFilter) []*Channel {
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
@@ -133,7 +134,8 @@ func providerChannelsFromCache(group, modelName, requestPath string) []*Channel 
 	if len(channels) == 0 {
 		channels = group2model2channels[group][ratio_setting.FormatMatchingModelName(modelName)]
 	}
-	channels = filterChannelsByRequestPathAndModel(channels, requestPath, modelName)
+	filters = withRequestPathFilter(filters, requestPath)
+	channels, _ = filterCandidateIDs(channels, modelName, filters)
 	result := make([]*Channel, 0, len(channels))
 	seen := make(map[int]struct{}, len(channels))
 	for _, channelID := range channels {
@@ -150,7 +152,7 @@ func providerChannelsFromCache(group, modelName, requestPath string) []*Channel 
 	return result
 }
 
-func providerChannelsFromDB(group, modelName, requestPath string) ([]*Channel, error) {
+func providerChannelsFromDB(group, modelName, requestPath string, filters []dto.ChannelFilter) ([]*Channel, error) {
 	var abilities []Ability
 	groupColumn := commonGroupCol
 	if groupColumn == "" {
@@ -167,7 +169,8 @@ func providerChannelsFromDB(group, modelName, requestPath string) ([]*Channel, e
 			}
 		}
 	}
-	abilities = filterAbilitiesByRequestPathAndModel(abilities, requestPath, modelName)
+	filters = withRequestPathFilter(filters, requestPath)
+	abilities = filterAbilitiesByConstraints(abilities, modelName, filters)
 	if len(abilities) == 0 {
 		return []*Channel{}, nil
 	}
@@ -188,18 +191,24 @@ func providerChannelsFromDB(group, modelName, requestPath string) ([]*Channel, e
 	return channels, nil
 }
 
-func getProviderChannels(group, modelName, requestPath string) ([]*Channel, error) {
+func getProviderChannels(group, modelName, requestPath string, filters []dto.ChannelFilter) ([]*Channel, error) {
 	if common.MemoryCacheEnabled {
-		return providerChannelsFromCache(group, modelName, requestPath), nil
+		return providerChannelsFromCache(group, modelName, requestPath, filters), nil
 	}
-	return providerChannelsFromDB(group, modelName, requestPath)
+	return providerChannelsFromDB(group, modelName, requestPath, filters)
 }
 
 // GetAvailableProviderSlugs returns providers that can serve the model in the
 // requested group. Providers are ordered by their highest configured channel
 // priority, then alphabetically for deterministic fallback behavior.
 func GetAvailableProviderSlugs(group, modelName, requestPath string) ([]string, error) {
-	channels, err := getProviderChannels(group, modelName, requestPath)
+	return GetAvailableProviderSlugsWithFilters(group, modelName, requestPath, nil)
+}
+
+// GetAvailableProviderSlugsWithFilters returns providers that satisfy the
+// request path and any per-request channel constraints.
+func GetAvailableProviderSlugsWithFilters(group, modelName, requestPath string, filters []dto.ChannelFilter) ([]string, error) {
+	channels, err := getProviderChannels(group, modelName, requestPath, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -257,11 +266,28 @@ func GetRandomSatisfiedChannelForProviderExcluding(
 	group, modelName, requestPath, provider string,
 	excluded map[int]struct{},
 ) (*Channel, error) {
+	return GetRandomSatisfiedChannelForProviderExcludingWithFilters(
+		group,
+		modelName,
+		requestPath,
+		provider,
+		excluded,
+		nil,
+	)
+}
+
+// GetRandomSatisfiedChannelForProviderExcludingWithFilters selects a channel
+// inside one provider while applying the request's channel constraints.
+func GetRandomSatisfiedChannelForProviderExcludingWithFilters(
+	group, modelName, requestPath, provider string,
+	excluded map[int]struct{},
+	filters []dto.ChannelFilter,
+) (*Channel, error) {
 	provider = normalizeProviderSlug(provider)
 	if provider == "" {
 		return nil, errors.New("provider is empty")
 	}
-	channels, err := getProviderChannels(group, modelName, requestPath)
+	channels, err := getProviderChannels(group, modelName, requestPath, filters)
 	if err != nil {
 		return nil, err
 	}
@@ -301,4 +327,22 @@ func GetRandomSatisfiedChannelForProviderExcluding(
 		}
 	}
 	return filtered[0], nil
+}
+
+func withRequestPathFilter(filters []dto.ChannelFilter, requestPath string) []dto.ChannelFilter {
+	if requestPath == "" {
+		return filters
+	}
+	for _, filter := range filters {
+		if filter.Kind == dto.FilterRequestPath && filter.RequestPath == requestPath {
+			return filters
+		}
+	}
+	result := make([]dto.ChannelFilter, 0, len(filters)+1)
+	result = append(result, filters...)
+	result = append(result, dto.ChannelFilter{
+		Kind:        dto.FilterRequestPath,
+		RequestPath: requestPath,
+	})
+	return result
 }
