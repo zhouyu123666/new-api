@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/observability"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -21,6 +22,9 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -80,11 +84,19 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	if resp == nil || dataHandler == nil {
 		return
 	}
+	otelRuntime := observability.FromContext(c.Request.Context())
+	streamParentCtx := c.Request.Context()
+	streamCtx := streamParentCtx
+	var streamSpan trace.Span
+	if otelRuntime != nil {
+		streamCtx, streamSpan = otelRuntime.StartStream(streamParentCtx, info)
+		c.Request = c.Request.WithContext(streamCtx)
+	}
 
 	// 无条件新建 StreamStatus
 	info.StreamStatus = relaycommon.NewStreamStatus()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(streamCtx)
 
 	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
 
@@ -270,6 +282,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				continue
 			}
 			if !strings.HasPrefix(data, "[DONE]") {
+				if otelRuntime != nil {
+					otelRuntime.RecordStreamChunk(streamCtx, data)
+				}
 				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
 
@@ -309,6 +324,17 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}
 
 	cleanup()
+	if otelRuntime != nil {
+		streamSpan.SetAttributes(
+			attribute.Int("new_api.stream.chunk_count", info.ReceivedResponseCount),
+			attribute.String("new_api.stream.end_reason", string(info.StreamStatus.EndReason)),
+		)
+		if !info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors() {
+			streamSpan.SetStatus(codes.Error, string(info.StreamStatus.EndReason))
+		}
+		otelRuntime.FinishSpan(streamSpan, nil)
+		c.Request = c.Request.WithContext(streamParentCtx)
+	}
 	if info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors() {
 		logger.LogInfo(c, fmt.Sprintf("stream ended: %s", info.StreamStatus.Summary()))
 	} else {

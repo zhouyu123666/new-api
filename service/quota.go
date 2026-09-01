@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/observability"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -87,7 +88,10 @@ func calculateAudioQuota(info QuotaInfo) (int, *common.QuotaClamp) {
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
-	if relayInfo.UsePrice {
+	// The main realtime relay accumulates usage and settles once through the
+	// BillingSession. Keep this legacy helper side-effect free whenever a
+	// session exists; otherwise response.done would be charged twice.
+	if relayInfo == nil || usage == nil || relayInfo.Billing != nil || relayInfo.PriceData.UsePrice {
 		return nil
 	}
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)
@@ -131,7 +135,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 			AudioTokens: audioOutTokens,
 		},
 		ModelName:  modelName,
-		UsePrice:   relayInfo.UsePrice,
+		UsePrice:   relayInfo.PriceData.UsePrice,
 		ModelRatio: modelRatio,
 		GroupRatio: actualGroupRatio,
 	}
@@ -142,11 +146,9 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if userQuota < quota {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
 	}
-
 	if !token.UnlimitedQuota && token.RemainQuota < quota {
 		return fmt.Errorf("token quota is not enough, token remain quota: %s, need quota: %s", logger.FormatQuota(token.RemainQuota), logger.FormatQuota(quota))
 	}
-
 	err = PostConsumeQuota(relayInfo, quota, 0, false)
 	if err != nil {
 		return err
@@ -155,15 +157,36 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	return nil
 }
 
+func recordQuotaUsageObservability(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, promptTokens, completionTokens, totalTokens, quota int) {
+	if ctx == nil || ctx.Request == nil || relayInfo == nil {
+		return
+	}
+	runtime := observability.FromContext(ctx.Request.Context())
+	if runtime == nil || (promptTokens <= 0 && completionTokens <= 0 && totalTokens <= 0) {
+		return
+	}
+	if totalTokens <= 0 {
+		totalTokens = promptTokens + completionTokens
+	}
+	runtime.RecordUsage(ctx.Request.Context(), promptTokens, completionTokens, totalTokens, quota, relayInfo.PriceData.ModelPrice, relayInfo.PriceData.UsePrice)
+}
+
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
 	usage *dto.RealtimeUsage, extraContent string) {
 
 	var tieredResult *billingexpr.TieredResult
-	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
-		P:   float64(usage.InputTokens),
-		C:   float64(usage.OutputTokens),
-		Len: float64(usage.InputTokens),
-	})
+	tieredUsedVars := map[string]bool(nil)
+	if snap := relayInfo.TieredBillingSnapshot; snap != nil {
+		tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
+	}
+	tieredUsage := &dto.Usage{
+		PromptTokens:           usage.InputTokens,
+		CompletionTokens:       usage.OutputTokens,
+		TotalTokens:            usage.TotalTokens,
+		PromptTokensDetails:    usage.InputTokenDetails,
+		CompletionTokenDetails: usage.OutputTokenDetails,
+	}
+	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, BuildTieredTokenParams(tieredUsage, false, tieredUsedVars))
 	if tieredOk {
 		tieredResult = tieredRes
 	}
@@ -207,6 +230,11 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	totalTokens := usage.TotalTokens
+	if totalTokens == 0 {
+		// A few realtime upstreams omit total_tokens but do return the input and
+		// output counters. Do not discard that usage during settlement.
+		totalTokens = usage.InputTokens + usage.OutputTokens
+	}
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
@@ -231,6 +259,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
+	recordQuotaUsageObservability(ctx, relayInfo, usage.InputTokens, usage.OutputTokens, totalTokens, quota)
 
 	logModel := modelName
 	if extraContent != "" {
@@ -331,6 +360,11 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	}
 
 	totalTokens := usage.TotalTokens
+	if totalTokens == 0 {
+		// Some audio providers omit total_tokens while returning prompt and
+		// completion counts. Preserve the usage for settlement and logging.
+		totalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f，分组倍率 %.2f",
@@ -355,6 +389,7 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
+	recordQuotaUsageObservability(ctx, relayInfo, usage.PromptTokens, usage.CompletionTokens, totalTokens, quota)
 
 	logModel := relayInfo.OriginModelName
 	if extraContent != "" {
