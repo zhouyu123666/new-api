@@ -95,6 +95,12 @@ const extendedModelFormSchema = z.object({
   tags: z.array(z.string()),
   vendor_id: z.number().optional(),
   endpoints: z.string(),
+  context_length: z.string().refine(
+    (value) => value === '' || /^\d+$/.test(value),
+    'Context length must be a non-negative integer'
+  ),
+  parameter_count: z.string(),
+  release_date: z.string(),
   name_rule: z.number(),
   status: z.boolean(),
   sync_official: z.boolean(),
@@ -367,6 +373,9 @@ export function ModelMutateDrawer({
       tags: [],
       vendor_id: undefined,
       endpoints: '',
+      context_length: '',
+      parameter_count: '',
+      release_date: '',
       name_rule: 0,
       status: true,
       sync_official: true,
@@ -435,6 +444,12 @@ export function ModelMutateDrawer({
         tags: parseModelTags(model.tags),
         vendor_id: model.vendor_id,
         endpoints: model.endpoints || '',
+        context_length:
+          model.context_length && model.context_length > 0
+            ? String(model.context_length)
+            : '',
+        parameter_count: model.parameter_count || '',
+        release_date: model.release_date || '',
         name_rule: model.name_rule || 0,
         status: model.status === 1,
         sync_official: model.sync_official === 1,
@@ -460,6 +475,9 @@ export function ModelMutateDrawer({
         tags: [],
         vendor_id: undefined,
         endpoints: '',
+        context_length: '',
+        parameter_count: '',
+        release_date: '',
         name_rule: 0,
         status: true,
         sync_official: true,
@@ -474,6 +492,10 @@ export function ModelMutateDrawer({
       try {
         const submitData = {
           ...values,
+          context_length:
+            values.context_length === ''
+              ? 0
+              : Number.parseInt(values.context_length, 10),
           id: isEditing ? currentModelId : undefined,
           tags: Array.isArray(values.tags) ? values.tags.join(',') : '',
           status: values.status ? 1 : 0,
@@ -819,7 +841,7 @@ export function ModelMutateDrawer({
                 name='vendor_id'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Vendor')}</FormLabel>
+                    <FormLabel>{t('Model vendor')}</FormLabel>
                     <Select
                       items={vendors.map((vendor) => ({
                         value: String(vendor.id),
@@ -875,6 +897,56 @@ export function ModelMutateDrawer({
                   </FormItem>
                 )}
               />
+
+              <div className='grid grid-cols-1 gap-4 sm:grid-cols-3'>
+                <FormField
+                  control={form.control}
+                  name='context_length'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Context')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          step={1}
+                          placeholder='128000'
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='parameter_count'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Parameters')}</FormLabel>
+                      <FormControl>
+                        <Input placeholder='70B' {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='release_date'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Publish Date')}</FormLabel>
+                      <FormControl>
+                        <Input type='date' {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
             </SideDrawerSection>
 
             {/* Matching Configuration */}

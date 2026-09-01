@@ -25,6 +25,8 @@ export { EmptyState } from './empty-state'
 export { SearchBar } from './search-bar'
 export {
   ModelDetails,
+  ModelSquareDetails,
+  ModelSquareDetailPage,
   ModelDetailsContent,
   ModelDetailsDrawer,
 } from './model-details'

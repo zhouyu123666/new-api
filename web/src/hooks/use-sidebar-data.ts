@@ -29,6 +29,7 @@ import {
   Radio,
   ServerCog,
   Settings,
+  Store,
   Ticket,
   User,
   Users,
@@ -36,7 +37,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
-import { type SidebarData } from '@/components/layout/types'
+import type { SidebarData } from '@/components/layout/types'
+import { useStatus } from '@/hooks/use-status'
+import { parseHeaderNavModulesFromStatus } from '@/lib/nav-modules'
 import { ROLE } from '@/lib/roles'
 
 /**
@@ -47,6 +50,10 @@ import { ROLE } from '@/lib/roles'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const { status } = useStatus()
+  const pricingEnabled = parseHeaderNavModulesFromStatus(
+    status as Record<string, unknown> | null
+  ).pricing.enabled
 
   return {
     navGroups: [
@@ -66,6 +73,17 @@ export function useSidebarData(): SidebarData {
           },
         ],
       },
+      ...(pricingEnabled
+        ? [
+            {
+              id: 'models',
+              title: t('Models'),
+              items: [
+                { title: t('Model Square'), url: '/model-square', icon: Store },
+              ],
+            },
+          ]
+        : []),
       {
         id: 'general',
         title: t('General'),

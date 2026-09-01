@@ -257,7 +257,6 @@ func migrateDB() error {
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
-
 	err := DB.AutoMigrate(
 		&Channel{},
 		&Token{},
@@ -285,6 +284,8 @@ func migrateDB() error {
 		&UserSubscription{},
 		&SubscriptionPreConsumeRecord{},
 		&CustomOAuthProvider{},
+		&Provider{},
+		&ModelProviderPrice{},
 		&UserOAuthBinding{},
 		&PerfMetric{},
 		&SystemInstance{},
@@ -294,6 +295,9 @@ func migrateDB() error {
 		&AuthzRole{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := SeedProvidersFromChannels(); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
@@ -317,7 +321,6 @@ func migrateDB() error {
 func migrateDBFast() error {
 
 	var wg sync.WaitGroup
-
 	migrations := []struct {
 		model interface{}
 		name  string
@@ -348,6 +351,8 @@ func migrateDBFast() error {
 		{&UserSubscription{}, "UserSubscription"},
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
+		{&Provider{}, "Provider"},
+		{&ModelProviderPrice{}, "ModelProviderPrice"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&PerfMetric{}, "PerfMetric"},
 		{&SystemInstance{}, "SystemInstance"},
@@ -376,6 +381,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := SeedProvidersFromChannels(); err != nil {
+		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {
 		return err
@@ -406,6 +414,9 @@ func migrateLOGDB() error {
 func migrateClickHouseLogDB() error {
 	ttlDays := clickHouseLogTTLDays()
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
+		return err
+	}
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS provider_slug String DEFAULT ''").Error; err != nil {
 		return err
 	}
 	return syncClickHouseLogTTL(ttlDays)
@@ -451,6 +462,7 @@ CREATE TABLE IF NOT EXISTS logs (
 	use_time Int32 DEFAULT 0,
 	is_stream UInt8 DEFAULT 0,
 	channel_id Int32 DEFAULT 0,
+	provider_slug String DEFAULT '',
 	token_id Int32 DEFAULT 0,
 	`+"`group`"+` String DEFAULT '',
 	ip String DEFAULT '',

@@ -11,12 +11,14 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	RequestPath  string
-	Retry        *int
-	resetNextTry bool
+	Ctx                *gin.Context
+	TokenGroup         string
+	ModelName          string
+	RequestPath        string
+	ProviderRouting    *model.ProviderRouting
+	Retry              *int
+	ExcludedChannelIDs map[int]struct{}
+	resetNextTry       bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -43,6 +45,18 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+// ExcludeChannel records a failed channel for this request so provider
+// routing can select another internal channel on the next retry.
+func (p *RetryParam) ExcludeChannel(channelID int) {
+	if channelID <= 0 {
+		return
+	}
+	if p.ExcludedChannelIDs == nil {
+		p.ExcludedChannelIDs = make(map[int]struct{})
+	}
+	p.ExcludedChannelIDs[channelID] = struct{}{}
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -85,6 +99,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	providerRouting := param.ProviderRouting.Normalized()
 
 	if param.TokenGroup == "auto" {
 		autoGroups := GetRequestAutoGroups(param.Ctx, userGroup)
@@ -115,7 +130,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry, param.RequestPath)
+			channel, _ = getChannelForRouting(autoGroup, param.ModelName, param.RequestPath, priorityRetry, providerRouting, param.ExcludedChannelIDs)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,10 +168,61 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath)
+		channel, err = getChannelForRouting(param.TokenGroup, param.ModelName, param.RequestPath, param.GetRetry(), providerRouting, param.ExcludedChannelIDs)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}
 	}
 	return channel, selectGroup, nil
+}
+
+func getChannelForRouting(group, modelName, requestPath string, retry int, routing *model.ProviderRouting, excluded map[int]struct{}) (*model.Channel, error) {
+	if routing == nil {
+		return model.GetRandomSatisfiedChannel(group, modelName, retry, requestPath)
+	}
+
+	available, err := model.GetAvailableProviderSlugs(group, modelName, requestPath)
+	if err != nil {
+		return nil, err
+	}
+	availableSet := make(map[string]struct{}, len(available))
+	for _, provider := range available {
+		availableSet[provider] = struct{}{}
+	}
+	providers := make([]string, 0, len(routing.Order)+len(available))
+	seen := make(map[string]struct{}, len(routing.Order)+len(available))
+	for _, provider := range routing.Order {
+		if _, exists := availableSet[provider]; !exists {
+			continue
+		}
+		providers = append(providers, provider)
+		seen[provider] = struct{}{}
+	}
+	if len(providers) == 0 && !routing.AllowFallbacks {
+		return nil, nil
+	}
+	if routing.AllowFallbacks {
+		for _, provider := range available {
+			if _, exists := seen[provider]; exists {
+				continue
+			}
+			providers = append(providers, provider)
+		}
+	}
+	for _, provider := range providers {
+		channel, err := model.GetRandomSatisfiedChannelForProviderExcluding(
+			group,
+			modelName,
+			requestPath,
+			provider,
+			excluded,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if channel != nil {
+			return channel, nil
+		}
+	}
+	return nil, nil
 }

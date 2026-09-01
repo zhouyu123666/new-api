@@ -8,6 +8,7 @@ const (
 	ContextKeyEstimatedTokens ContextKey = "estimated_tokens"
 
 	ContextKeyOriginalModel    ContextKey = "original_model"
+	ContextKeyProviderRouting  ContextKey = "provider_routing"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
 
 	/* token related keys */
@@ -24,6 +25,7 @@ const (
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"
 	ContextKeyChannelName              ContextKey = "channel_name"
+	ContextKeyProviderSlug             ContextKey = "provider_slug"
 	ContextKeyChannelCreateTime        ContextKey = "channel_create_time"
 	ContextKeyChannelBaseUrl           ContextKey = "base_url"
 	ContextKeyChannelType              ContextKey = "channel_type"

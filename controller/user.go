@@ -662,6 +662,94 @@ func GetUserModels(c *gin.Context) {
 	})
 }
 
+type UserModelProvider struct {
+	Slug      string `json:"slug"`
+	Name      string `json:"name"`
+	Icon      string `json:"icon,omitempty"`
+	Available bool   `json:"available"`
+}
+
+// GetUserModelProviders returns user-authorized providers that can serve a
+// model in the requested group. Channel identifiers and deployment details
+// are intentionally not exposed.
+func GetUserModelProviders(c *gin.Context) {
+	user, err := model.GetUserCache(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	modelName := strings.TrimSpace(c.Query("model"))
+	if modelName == "" {
+		common.ApiSuccess(c, []UserModelProvider{})
+		return
+	}
+
+	usableGroups := service.GetUserUsableGroups(user.Group)
+	requestedGroup := strings.TrimSpace(c.Query("group"))
+	groups := make([]string, 0, 1)
+	switch {
+	case requestedGroup == "":
+		groups = append(groups, user.Group)
+	case requestedGroup == "auto":
+		if _, ok := usableGroups[requestedGroup]; !ok {
+			common.ApiSuccess(c, []UserModelProvider{})
+			return
+		}
+		groups = service.GetUserAutoGroup(user.Group)
+	default:
+		if _, ok := usableGroups[requestedGroup]; !ok {
+			common.ApiSuccess(c, []UserModelProvider{})
+			return
+		}
+		groups = append(groups, requestedGroup)
+	}
+
+	seen := make(map[string]struct{})
+	slugs := make([]string, 0)
+	for _, group := range groups {
+		available, err := model.GetAvailableProviderSlugs(
+			group,
+			modelName,
+			"/pg/chat/completions",
+		)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		for _, slug := range available {
+			if _, exists := seen[slug]; exists {
+				continue
+			}
+			seen[slug] = struct{}{}
+			slugs = append(slugs, slug)
+		}
+	}
+
+	metadata := model.GetProviderMetadataMap()
+	providers := make([]UserModelProvider, 0, len(slugs))
+	for _, slug := range slugs {
+		provider, exists := metadata[slug]
+		if exists && provider.Status != 1 {
+			continue
+		}
+		name := slug
+		icon := ""
+		if exists {
+			if strings.TrimSpace(provider.DisplayName) != "" {
+				name = provider.DisplayName
+			}
+			icon = provider.Icon
+		}
+		providers = append(providers, UserModelProvider{
+			Slug:      slug,
+			Name:      name,
+			Icon:      icon,
+			Available: true,
+		})
+	}
+	common.ApiSuccess(c, providers)
+}
+
 func UpdateUser(c *gin.Context) {
 	var updatedUser model.User
 	err := common.DecodeJson(c.Request.Body, &updatedUser)

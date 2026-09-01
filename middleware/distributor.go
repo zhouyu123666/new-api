@@ -23,11 +23,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type ModelRequest struct {
-	Model string `json:"model"`
-	Group string `json:"group,omitempty"`
+	Model           string                 `json:"model"`
+	Group           string                 `json:"group,omitempty"`
+	ProviderRouting *model.ProviderRouting `json:"provider,omitempty"`
 }
 
 func Distribute() func(c *gin.Context) {
@@ -38,6 +40,15 @@ func Distribute() func(c *gin.Context) {
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
+		}
+		if modelRequest.ProviderRouting != nil {
+			routing := modelRequest.ProviderRouting.Normalized()
+			if routing == nil {
+				abortWithOpenAiMessage(c, http.StatusBadRequest, "provider.order must contain at least one provider")
+				return
+			}
+			common.SetContextKey(c, constant.ContextKeyProviderRouting, routing)
+			modelRequest.ProviderRouting = routing
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
@@ -53,6 +64,12 @@ func Distribute() func(c *gin.Context) {
 			if channel.Status != common.ChannelStatusEnabled {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
+			}
+			if routing := modelRequest.ProviderRouting; routing != nil {
+				if !providerRoutingAllowsChannel(routing, channel) {
+					abortWithOpenAiMessage(c, http.StatusForbidden, "provider routing conflicts with the token-specific channel")
+					return
+				}
 			}
 		} else {
 			// Select a channel for the user
@@ -102,43 +119,48 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
-					affinityUsable := false
-					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
-						channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
-						if usingGroup == "auto" {
-							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-							autoGroups := service.GetRequestAutoGroups(c, userGroup)
-							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
-									selectGroup = g
-									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
-									channel = preferred
-									affinityUsable = true
-									service.MarkChannelAffinityUsed(c, g, preferred.Id)
-									break
+				// Provider routing is an explicit caller constraint, so channel affinity
+				// must not bypass the requested provider order.
+				if modelRequest.ProviderRouting == nil {
+					if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+						affinityUsable := false
+						preferred, err := model.CacheGetChannel(preferredChannelID)
+						if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled &&
+							channelSupportsRequestPath(preferred, c.Request.URL.Path, modelRequest.Model) {
+							if usingGroup == "auto" {
+								userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+								autoGroups := service.GetRequestAutoGroups(c, userGroup)
+								for _, g := range autoGroups {
+									if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+										selectGroup = g
+										common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
+										channel = preferred
+										affinityUsable = true
+										service.MarkChannelAffinityUsed(c, g, preferred.Id)
+										break
+									}
 								}
+							} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+								channel = preferred
+								selectGroup = usingGroup
+								affinityUsable = true
+								service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
-							channel = preferred
-							selectGroup = usingGroup
-							affinityUsable = true
-							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						}
-					}
-					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
-						service.ClearCurrentChannelAffinityCache(c)
+						if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+							service.ClearCurrentChannelAffinityCache(c)
+						}
 					}
 				}
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:         c,
-						ModelName:   modelRequest.Model,
-						TokenGroup:  usingGroup,
-						RequestPath: c.Request.URL.Path,
-						Retry:       common.GetPointer(0),
+						Ctx:             c,
+						ModelName:       modelRequest.Model,
+						TokenGroup:      usingGroup,
+						RequestPath:     c.Request.URL.Path,
+						ProviderRouting: modelRequest.ProviderRouting,
+						Retry:           common.GetPointer(0),
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -168,6 +190,19 @@ func Distribute() func(c *gin.Context) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func providerRoutingAllowsChannel(routing *model.ProviderRouting, channel *model.Channel) bool {
+	if routing == nil || channel == nil {
+		return routing == nil
+	}
+	provider := channel.GetProviderSlug()
+	for _, requested := range routing.Order {
+		if requested == provider {
+			return true
+		}
+	}
+	return false
 }
 
 // channelSupportsRequestPath reports whether a channel can serve the request path.
@@ -219,14 +254,39 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 		return nil, errors.New("invalid JSON request body")
 	}
 
-	values := gjson.GetManyBytes(requestBody, "model", "group")
-	model, err := getJSONStringValue(values[0], "model")
+	values := gjson.GetManyBytes(requestBody, "model", "group", "provider")
+	modelName, err := getJSONStringValue(values[0], "model")
 	if err != nil {
 		return nil, err
 	}
 	group, err := getJSONStringValue(values[1], "group")
 	if err != nil {
 		return nil, err
+	}
+	var providerRouting *model.ProviderRouting
+	if values[2].Exists() && values[2].Type != gjson.Null {
+		if values[2].Type != gjson.JSON {
+			return nil, fmt.Errorf("field provider must be an object")
+		}
+		var parsed model.ProviderRouting
+		if err := common.Unmarshal([]byte(values[2].Raw), &parsed); err != nil {
+			return nil, fmt.Errorf("field provider is invalid: %w", err)
+		}
+		parsed.HasAllowFallbacks = values[2].Get("allow_fallbacks").Exists()
+		providerRouting = &parsed
+	}
+	cleanedBody, err := sjson.DeleteBytes(requestBody, "provider")
+	if err != nil {
+		return nil, fmt.Errorf("failed to remove provider routing field: %w", err)
+	}
+	if string(cleanedBody) != string(requestBody) {
+		replacement, err := common.CreateBodyStorage(cleanedBody)
+		if err != nil {
+			return nil, err
+		}
+		_ = storage.Close()
+		c.Set(common.KeyBodyStorage, replacement)
+		storage = replacement
 	}
 
 	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
@@ -235,8 +295,9 @@ func getModelFromJSONBody(c *gin.Context) (*ModelRequest, error) {
 	c.Request.Body = io.NopCloser(storage)
 
 	return &ModelRequest{
-		Model: model,
-		Group: group,
+		Model:           modelName,
+		Group:           group,
+		ProviderRouting: providerRouting,
 	}, nil
 }
 
@@ -312,6 +373,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			}
 			if req != nil {
 				modelRequest.Model = req.Model
+				if req.ProviderRouting != nil {
+					modelRequest.ProviderRouting = req.ProviderRouting
+				}
 			}
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -327,6 +391,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 				return nil, false, err
 			}
 			modelRequest.Model = req.Model
+			if req.ProviderRouting != nil {
+				modelRequest.ProviderRouting = req.ProviderRouting
+			}
 			relayMode = relayconstant.RelayModeVideoSubmit
 		} else if c.Request.Method == http.MethodGet {
 			relayMode = relayconstant.RelayModeVideoFetchByID
@@ -350,6 +417,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
+		if req.ProviderRouting != nil {
+			modelRequest.ProviderRouting = req.ProviderRouting
+		}
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
@@ -374,6 +444,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			req, err := getModelFromRequest(c)
 			if err == nil && req.Model != "" {
 				modelRequest.Model = req.Model
+				if req.ProviderRouting != nil {
+					modelRequest.ProviderRouting = req.ProviderRouting
+				}
 			}
 		}
 	}
@@ -386,6 +459,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			// 先尝试从请求读取
 			if req, err := getModelFromRequest(c); err == nil && req.Model != "" {
 				modelRequest.Model = req.Model
+				if req.ProviderRouting != nil {
+					modelRequest.ProviderRouting = req.ProviderRouting
+				}
 			}
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "whisper-1")
 			relayMode = relayconstant.RelayModeAudioTranslation
@@ -393,6 +469,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			// 先尝试从请求读取
 			if req, err := getModelFromRequest(c); err == nil && req.Model != "" {
 				modelRequest.Model = req.Model
+				if req.ProviderRouting != nil {
+					modelRequest.ProviderRouting = req.ProviderRouting
+				}
 			}
 			modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "whisper-1")
 			relayMode = relayconstant.RelayModeAudioTranscription
@@ -407,6 +486,9 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		modelRequest.Model = req.Model
 		modelRequest.Group = req.Group
+		if req.ProviderRouting != nil {
+			modelRequest.ProviderRouting = req.ProviderRouting
+		}
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}
 
@@ -445,6 +527,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
+	common.SetContextKey(c, constant.ContextKeyProviderSlug, channel.GetProviderSlug())
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
 	common.SetContextKey(c, constant.ContextKeyChannelCreateTime, channel.CreatedTime)
 	common.SetContextKey(c, constant.ContextKeyChannelSetting, channel.GetSetting())

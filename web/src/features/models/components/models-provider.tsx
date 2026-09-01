@@ -23,6 +23,7 @@ import type {
   Model,
   ModelTabCategory,
   Vendor,
+  Provider,
   SyncDiffData,
   SyncLocale,
   SyncSource,
@@ -37,6 +38,8 @@ type DialogType =
   | 'update-model'
   | 'create-vendor'
   | 'update-vendor'
+  | 'create-provider'
+  | 'update-provider'
   | 'missing-models'
   | 'sync-wizard'
   | 'upstream-conflict'
@@ -51,6 +54,8 @@ type ModelsContextType = {
   setCurrentRow: (model: Model | null) => void
   currentVendor: Vendor | null
   setCurrentVendor: (vendor: Vendor | null) => void
+  currentProvider: Provider | null
+  setCurrentProvider: (provider: Provider | null) => void
   selectedVendor: string | null
   setSelectedVendor: (vendor: string | null) => void
   descriptionData: { modelName: string; description: string } | null
@@ -81,6 +86,7 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState<DialogType>(null)
   const [currentRow, setCurrentRow] = useState<Model | null>(null)
   const [currentVendor, setCurrentVendor] = useState<Vendor | null>(null)
+  const [currentProvider, setCurrentProvider] = useState<Provider | null>(null)
   const [selectedVendor, setSelectedVendor] = useState<string | null>(null)
   const [descriptionData, setDescriptionData] = useState<{
     modelName: string
@@ -107,6 +113,8 @@ export function ModelsProvider({ children }: { children: React.ReactNode }) {
         setCurrentRow,
         currentVendor,
         setCurrentVendor,
+        currentProvider,
+        setCurrentProvider,
         selectedVendor,
         setSelectedVendor,
         descriptionData,

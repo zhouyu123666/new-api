@@ -30,7 +30,15 @@ import {
   VIEW_MODES,
   type ViewMode,
 } from '../constants'
-import { filterAndSortModels, extractAllTags } from '../lib/filters'
+import {
+  filterAndSortModels,
+  extractAllTags,
+  filterByAdvanced,
+  getProviderQuantizations,
+  getProviderRegions,
+  hasValues,
+  type PricingAdvancedFilters,
+} from '../lib/filters'
 import type { PricingModel, TokenUnit } from '../types'
 
 type FilterState = {
@@ -44,6 +52,13 @@ type FilterState = {
   tokenUnit?: TokenUnit
   view?: ViewMode
   rechargePrice?: boolean
+  contextLength?: string
+  parameterCount?: string
+  releaseDate?: string
+  free?: string
+  batch?: string
+  region?: string
+  quantization?: string
 }
 
 function normalizeViewMode(value: unknown): ViewMode {
@@ -54,7 +69,7 @@ function normalizeViewMode(value: unknown): ViewMode {
 }
 
 export function useFilters(models: PricingModel[]) {
-  const search = useSearch({ from: '/pricing/' })
+  const search = useSearch({ strict: false }) as FilterState
   const [filterState, setFilterState] = useState<FilterState>(() => ({
     search: search.search,
     sort: search.sort,
@@ -66,6 +81,13 @@ export function useFilters(models: PricingModel[]) {
     tokenUnit: search.tokenUnit,
     view: search.view,
     rechargePrice: search.rechargePrice,
+    contextLength: search.contextLength,
+    parameterCount: search.parameterCount,
+    releaseDate: search.releaseDate,
+    free: search.free,
+    batch: search.batch,
+    region: search.region,
+    quantization: search.quantization,
   }))
 
   const searchInput = filterState.search || ''
@@ -80,6 +102,18 @@ export function useFilters(models: PricingModel[]) {
     filterState.tokenUnit === 'K' ? 'K' : DEFAULT_TOKEN_UNIT
   const viewMode = normalizeViewMode(filterState.view)
   const showRechargePrice = filterState.rechargePrice === true
+  const advancedFilters = useMemo<PricingAdvancedFilters>(
+    () => ({
+      contextLength: filterState.contextLength || FILTER_ALL,
+      parameterCount: filterState.parameterCount || FILTER_ALL,
+      releaseDate: filterState.releaseDate || FILTER_ALL,
+      free: filterState.free || FILTER_ALL,
+      batch: filterState.batch || FILTER_ALL,
+      region: filterState.region || FILTER_ALL,
+      quantization: filterState.quantization || FILTER_ALL,
+    }),
+    [filterState]
+  )
 
   const updateFilters = useCallback((updates: Record<string, unknown>) => {
     setFilterState((prev) => {
@@ -140,6 +174,11 @@ export function useFilters(models: PricingModel[]) {
     (v: boolean) => updateFilters({ rechargePrice: v || undefined }),
     [updateFilters]
   )
+  const setAdvancedFilter = useCallback(
+    (key: keyof PricingAdvancedFilters, value: string) =>
+      updateFilters({ [key]: value === FILTER_ALL ? undefined : value }),
+    [updateFilters]
+  )
 
   const availableTags = useMemo(() => {
     if (!models || models.length === 0) return []
@@ -149,7 +188,7 @@ export function useFilters(models: PricingModel[]) {
   const filteredModels = useMemo(() => {
     if (!models || models.length === 0) return []
 
-    return filterAndSortModels(models, {
+    const base = filterAndSortModels(models, {
       search: debouncedSearchInput,
       vendor: vendorFilter,
       group: groupFilter,
@@ -158,6 +197,7 @@ export function useFilters(models: PricingModel[]) {
       tag: tagFilter,
       sortBy,
     })
+    return filterByAdvanced(base, advancedFilters)
   }, [
     models,
     debouncedSearchInput,
@@ -167,6 +207,7 @@ export function useFilters(models: PricingModel[]) {
     endpointTypeFilter,
     tagFilter,
     sortBy,
+    advancedFilters,
   ])
 
   const hasActiveFilters = useMemo(
@@ -175,18 +216,36 @@ export function useFilters(models: PricingModel[]) {
       groupFilter !== FILTER_ALL ||
       quotaTypeFilter !== QUOTA_TYPES.ALL ||
       endpointTypeFilter !== ENDPOINT_TYPES.ALL ||
-      tagFilter !== FILTER_ALL,
-    [vendorFilter, groupFilter, quotaTypeFilter, endpointTypeFilter, tagFilter]
+      tagFilter !== FILTER_ALL ||
+      Object.values(advancedFilters).some((value) => value !== FILTER_ALL),
+    [
+      vendorFilter,
+      groupFilter,
+      quotaTypeFilter,
+      endpointTypeFilter,
+      tagFilter,
+      advancedFilters,
+    ]
   )
 
   const activeFilterCount = useMemo(
     () =>
-      (vendorFilter !== FILTER_ALL ? 1 : 0) +
-      (groupFilter !== FILTER_ALL ? 1 : 0) +
-      (quotaTypeFilter !== QUOTA_TYPES.ALL ? 1 : 0) +
-      (endpointTypeFilter !== ENDPOINT_TYPES.ALL ? 1 : 0) +
-      (tagFilter !== FILTER_ALL ? 1 : 0),
-    [vendorFilter, groupFilter, quotaTypeFilter, endpointTypeFilter, tagFilter]
+      [
+        vendorFilter !== FILTER_ALL,
+        groupFilter !== FILTER_ALL,
+        quotaTypeFilter !== QUOTA_TYPES.ALL,
+        endpointTypeFilter !== ENDPOINT_TYPES.ALL,
+        tagFilter !== FILTER_ALL,
+        ...Object.values(advancedFilters).map((value) => value !== FILTER_ALL),
+      ].filter(Boolean).length,
+    [
+      vendorFilter,
+      groupFilter,
+      quotaTypeFilter,
+      endpointTypeFilter,
+      tagFilter,
+      advancedFilters,
+    ]
   )
 
   const clearFilters = useCallback(() => {
@@ -196,6 +255,13 @@ export function useFilters(models: PricingModel[]) {
       quotaType: undefined,
       endpointType: undefined,
       tag: undefined,
+      contextLength: undefined,
+      parameterCount: undefined,
+      releaseDate: undefined,
+      free: undefined,
+      batch: undefined,
+      region: undefined,
+      quantization: undefined,
     })
   }, [updateFilters])
 
@@ -228,6 +294,29 @@ export function useFilters(models: PricingModel[]) {
     hasActiveFilters,
     activeFilterCount,
     availableTags,
+    advancedFilters,
+    advancedOptions: {
+      hasContextLength: hasValues(models, (model) => model.context_length),
+      hasParameterCount: hasValues(models, (model) => model.parameter_count),
+      hasReleaseDate: hasValues(models, (model) => model.release_date),
+      hasFree: models.some((model) =>
+        (model.providers ?? []).some(
+          (provider) =>
+            provider.available &&
+            (provider.metadata?.free === true ||
+              (provider.pricing?.input_price === 0 &&
+                provider.pricing?.output_price === 0))
+        )
+      ),
+      hasBatch: models.some((model) =>
+        (model.providers ?? []).some(
+          (provider) => provider.available && provider.metadata?.batch === true
+        )
+      ),
+      regions: getProviderRegions(models),
+      quantizations: getProviderQuantizations(models),
+    },
+    setAdvancedFilter,
     clearFilters,
     clearSearch,
   }

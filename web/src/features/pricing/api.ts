@@ -18,7 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import type { PricingData } from './types'
+import type {
+  ModelSquareData,
+  ModelSquareProviderDetail,
+  PricingData,
+  PricingModel,
+} from './types'
 
 // ----------------------------------------------------------------------------
 // Pricing APIs
@@ -27,5 +32,63 @@ import type { PricingData } from './types'
 // Get model pricing data
 export async function getPricing(): Promise<PricingData> {
   const res = await api.get('/api/pricing')
+  return res.data
+}
+
+export async function getModelSquare(params?: {
+  offset?: number
+  limit?: number
+}): Promise<ModelSquareData> {
+  const res = await api.get('/api/model-square', { params })
+  return res.data
+}
+
+export async function getAllModelSquare(): Promise<ModelSquareData> {
+  const pageSize = 100
+  const firstPage = await getModelSquare({ offset: 0, limit: pageSize })
+  if (!firstPage.success) {
+    throw new Error(firstPage.message || 'Failed to load model square')
+  }
+  const total = firstPage.data?.total ?? firstPage.data?.items?.length ?? 0
+  const pageCount = Math.ceil(total / pageSize)
+  if (pageCount <= 1) return firstPage
+
+  const pages = await Promise.all(
+    Array.from({ length: pageCount - 1 }, (_, index) =>
+      getModelSquare({ offset: (index + 1) * pageSize, limit: pageSize })
+    )
+  )
+  const failedPage = pages.find((page) => !page.success)
+  if (failedPage) {
+    throw new Error(failedPage.message || 'Failed to load model square')
+  }
+  return {
+    ...firstPage,
+    data: {
+      items: [
+        ...(firstPage.data?.items ?? []),
+        ...pages.flatMap((page) => page.data?.items ?? []),
+      ],
+      total,
+      offset: 0,
+      limit: pageSize,
+    },
+  }
+}
+
+export async function getModelSquareDetail(
+  modelId: string
+): Promise<{ success: boolean; data: PricingModel }> {
+  const res = await api.get(`/api/model-square/${encodeURIComponent(modelId)}`)
+  return res.data
+}
+
+export async function getModelSquareProviderDetail(
+  modelId: string,
+  providerSlug: string
+): Promise<{ success: boolean; data: ModelSquareProviderDetail }> {
+  const res = await api.get(
+    `/api/model-square/${encodeURIComponent(modelId)}/providers/${encodeURIComponent(providerSlug)}`
+  )
   return res.data
 }

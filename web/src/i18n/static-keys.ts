@@ -75,6 +75,10 @@ export const STATIC_I18N_KEYS = [
   'All Tags',
   'More...',
   'Less',
+  '≤ 8K',
+  '8K–32K',
+  '32K–128K',
+  '≥ 128K',
 
   // Roles
   'Super Admin',

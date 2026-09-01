@@ -32,6 +32,13 @@ func SetApiRouter(router *gin.Engine) {
 		//apiRouter.GET("/midjourney", controller.GetMidjourney)
 		apiRouter.GET("/home_page_content", controller.GetHomePageContent)
 		apiRouter.GET("/pricing", middleware.HeaderNavModuleAuth("pricing"), controller.GetPricing)
+		modelSquareRoute := apiRouter.Group("/model-square")
+		modelSquareRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
+		{
+			modelSquareRoute.GET("", controller.GetModelSquare)
+			modelSquareRoute.GET("/:id", controller.GetModelSquareDetail)
+			modelSquareRoute.GET("/:id/providers/:provider", controller.GetModelSquareProviderDetail)
+		}
 		perfMetricsRoute := apiRouter.Group("/perf-metrics")
 		perfMetricsRoute.Use(middleware.HeaderNavModulePublicOrUserAuth("pricing"))
 		{
@@ -88,6 +95,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/self/groups", controller.GetUserGroups)
 				selfRoute.GET("/self", controller.GetSelf)
 				selfRoute.GET("/models", controller.GetUserModels)
+				selfRoute.GET("/providers", controller.GetUserModelProviders)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
@@ -339,6 +347,26 @@ func SetApiRouter(router *gin.Engine) {
 			vendorRoute.POST("/", controller.CreateVendorMeta)
 			vendorRoute.PUT("/", controller.UpdateVendorMeta)
 			vendorRoute.DELETE("/:id", controller.DeleteVendorMeta)
+		}
+
+		providerRoute := apiRouter.Group("/providers")
+		providerRoute.Use(middleware.AdminAuth())
+		{
+			providerRoute.GET("/", controller.ListProvider)
+			providerRoute.GET("/:id", controller.GetProvider)
+			providerRoute.POST("/", controller.CreateProvider)
+			providerRoute.PUT("/", controller.UpdateProvider)
+			providerRoute.DELETE("/:id", controller.DeleteProvider)
+		}
+
+		modelProviderPriceRoute := apiRouter.Group("/model-provider-prices")
+		modelProviderPriceRoute.Use(middleware.AdminAuth())
+		{
+			modelProviderPriceRoute.GET("/providers/:provider_slug/models", controller.ListProviderModels)
+			modelProviderPriceRoute.GET("/", controller.ListModelProviderPrice)
+			modelProviderPriceRoute.POST("/", controller.CreateModelProviderPrice)
+			modelProviderPriceRoute.PUT("/", controller.UpdateModelProviderPrice)
+			modelProviderPriceRoute.DELETE("/:id", controller.DeleteModelProviderPrice)
 		}
 
 		modelsRoute := apiRouter.Group("/models")
