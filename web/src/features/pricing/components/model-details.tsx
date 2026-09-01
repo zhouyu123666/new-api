@@ -93,6 +93,7 @@ import {
 } from '../lib/dynamic-price'
 import { isFreeProvider, parseTags } from '../lib/filters'
 import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
+import { modelSquareQueryKeys } from '../lib/query-keys'
 import {
   evaluateTaskUsageExamples,
   getTaskEnumFields,
@@ -716,7 +717,10 @@ type ModelProviderDetailsDrawerProps = {
 function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
   const { t } = useTranslation()
   const detailQuery = useQuery({
-    queryKey: ['model-square-provider', props.model.id, props.provider?.slug],
+    queryKey: modelSquareQueryKeys.provider(
+      props.model.id,
+      props.provider?.slug || ''
+    ),
     queryFn: () =>
       getModelSquareProviderDetail(
         String(props.model.id),
@@ -724,7 +728,8 @@ function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
       ),
     enabled:
       props.open && Boolean(props.provider?.slug) && Number(props.model.id) > 0,
-    staleTime: 60 * 1000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const detail = detailQuery.data?.data
   const model = detail?.model ?? props.model
@@ -2643,10 +2648,11 @@ export function ModelSquareDetails() {
     0.001
   )
   const detailQuery = useQuery({
-    queryKey: ['model-square-detail', modelId],
+    queryKey: modelSquareQueryKeys.detail(modelId || ''),
     queryFn: () => getModelSquareDetail(modelId || ''),
     enabled: Boolean(modelId),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
 
   const model = useMemo(

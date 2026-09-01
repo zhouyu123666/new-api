@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -153,32 +154,47 @@ func modelSquareItemFromModel(
 		}
 		item.BillingMode = pricing.BillingMode
 		item.BillingExpr = pricing.BillingExpr
+	}
+	availableProviders := make(map[string]model.ProviderSummary)
+	if pricing, ok := pricingByName[meta.ModelName]; ok {
+		availableProviders = make(map[string]model.ProviderSummary, len(pricing.Providers))
 		for _, provider := range pricing.Providers {
-			providerItem := modelSquareProvider{
-				Slug:      provider.Slug,
-				Name:      provider.Name,
-				Available: provider.Available,
-			}
-			if metadata, ok := providerMetadata[provider.Slug]; ok {
-				if strings.TrimSpace(metadata.DisplayName) != "" {
-					providerItem.Name = metadata.DisplayName
-				}
-				providerItem.Icon = metadata.Icon
-				providerItem.WebsiteURL = metadata.WebsiteURL
-				providerItem.StatusPageURL = metadata.StatusPageURL
-			}
-			if providerPrice, ok := providerPrices[provider.Slug]; ok {
-				providerItem.Pricing = &modelSquareProviderPricing{
-					InputPrice:      providerPrice.InputPrice,
-					OutputPrice:     providerPrice.OutputPrice,
-					CacheReadPrice:  providerPrice.CacheReadPrice,
-					CacheWritePrice: providerPrice.CacheWritePrice,
-					Source:          "model-provider",
-				}
-				providerItem.Metadata = providerMetadataFromPrice(providerPrice)
-			}
-			item.Providers = append(item.Providers, providerItem)
+			availableProviders[provider.Slug] = provider
 		}
+	}
+	providerSlugs := make([]string, 0, len(providerPrices))
+	for providerSlug := range providerPrices {
+		providerSlugs = append(providerSlugs, providerSlug)
+	}
+	sort.Strings(providerSlugs)
+	for _, providerSlug := range providerSlugs {
+		providerPrice := providerPrices[providerSlug]
+		runtimeProvider, hasRuntimeProvider := availableProviders[providerSlug]
+		providerItem := modelSquareProvider{
+			Slug:      providerSlug,
+			Name:      runtimeProvider.Name,
+			Available: hasRuntimeProvider && runtimeProvider.Available,
+		}
+		if providerItem.Name == "" {
+			providerItem.Name = providerSlug
+		}
+		if metadata, ok := providerMetadata[providerSlug]; ok {
+			if strings.TrimSpace(metadata.DisplayName) != "" {
+				providerItem.Name = metadata.DisplayName
+			}
+			providerItem.Icon = metadata.Icon
+			providerItem.WebsiteURL = metadata.WebsiteURL
+			providerItem.StatusPageURL = metadata.StatusPageURL
+		}
+		providerItem.Pricing = &modelSquareProviderPricing{
+			InputPrice:      providerPrice.InputPrice,
+			OutputPrice:     providerPrice.OutputPrice,
+			CacheReadPrice:  providerPrice.CacheReadPrice,
+			CacheWritePrice: providerPrice.CacheWritePrice,
+			Source:          "model-provider",
+		}
+		providerItem.Metadata = providerMetadataFromPrice(providerPrice)
+		item.Providers = append(item.Providers, providerItem)
 	}
 	return item
 }
@@ -219,8 +235,18 @@ func buildModelSquareItems(metas []model.Model) ([]modelSquareItem, error) {
 }
 
 func getModelSquareItems(offset, limit int) ([]modelSquareItem, int64, error) {
+	var modelIDs []int
+	if err := model.DB.Model(&model.ModelProviderPrice{}).
+		Distinct("model_id").
+		Pluck("model_id", &modelIDs).Error; err != nil {
+		return nil, 0, err
+	}
+	if len(modelIDs) == 0 {
+		return []modelSquareItem{}, 0, nil
+	}
 	var metas []model.Model
-	query := model.DB.Model(&model.Model{}).Where("status = ? AND name_rule = ?", 1, model.NameRuleExact)
+	query := model.DB.Model(&model.Model{}).
+		Where("status = ? AND name_rule = ? AND id IN ?", 1, model.NameRuleExact, modelIDs)
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -243,6 +269,15 @@ func getModelSquareItemByID(id int) (*modelSquareItem, error) {
 	var meta model.Model
 	if err := model.DB.Where("id = ? AND status = ? AND name_rule = ?", id, 1, model.NameRuleExact).First(&meta).Error; err != nil {
 		return nil, err
+	}
+	var providerConfigCount int64
+	if err := model.DB.Model(&model.ModelProviderPrice{}).
+		Where("model_id = ?", id).
+		Count(&providerConfigCount).Error; err != nil {
+		return nil, err
+	}
+	if providerConfigCount == 0 {
+		return nil, errors.New("model not found")
 	}
 	items, err := buildModelSquareItems([]model.Model{meta})
 	if err != nil {

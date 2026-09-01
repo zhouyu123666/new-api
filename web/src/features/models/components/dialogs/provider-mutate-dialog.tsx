@@ -32,6 +32,7 @@ import {
   sideDrawerFormClassName,
 } from '@/components/drawer-layout'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { invalidateModelSquareQueries } from '@/features/pricing/lib/query-keys'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -117,7 +118,7 @@ export function ProviderMutateDialog(props: {
       if (!response.success) throw new Error(response.message || t('Operation failed'))
       toast.success(isEdit ? t('Provider updated successfully') : t('Provider created successfully'))
       queryClient.invalidateQueries({ queryKey: providersQueryKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: ['model-square'] })
+      await invalidateModelSquareQueries(queryClient)
       props.onOpenChange(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('Operation failed'))

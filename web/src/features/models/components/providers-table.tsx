@@ -25,6 +25,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { getLobeIcon } from '@/lib/lobe-icon'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
+import { invalidateModelSquareQueries } from '@/features/pricing/lib/query-keys'
 
 import {
   deleteProvider,
@@ -58,11 +59,15 @@ function ProviderModelsPanel(props: { provider: Provider }) {
         p: page,
         page_size: pageSize,
       }),
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const configuredModelsQuery = useQuery({
     queryKey: providerModelQueryKeys.list(props.provider.slug, { all: true }),
     queryFn: () => getAllProviderModels(props.provider.slug),
     enabled: addModelOpen,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const items =
     query.data?.data?.items ?? EMPTY_PROVIDER_MODEL_RELATIONS
@@ -376,7 +381,7 @@ export function ProvidersTable() {
       if (!response.success) throw new Error(response.message || t('Operation failed'))
       toast.success(t('Provider deleted successfully'))
       queryClient.invalidateQueries({ queryKey: providersQueryKeys.lists() })
-      queryClient.invalidateQueries({ queryKey: ['model-square'] })
+      await invalidateModelSquareQueries(queryClient)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('Operation failed'))
     }

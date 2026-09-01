@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { invalidateModelSquareQueries } from '@/features/pricing/lib/query-keys'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -142,11 +143,15 @@ export function ModelProviderPricingSection(props: {
     queryKey: providersQueryKeys.list({ all: true }),
     queryFn: getAllProviders,
     enabled: props.enabled,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   const pricesQuery = useQuery({
     queryKey: modelProviderPriceQueryKeys.list(props.modelId ?? 0),
     queryFn: () => getModelProviderPrices(props.modelId ?? 0),
     enabled: props.enabled && Boolean(props.modelId),
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
 
   const providers = useMemo(() => {
@@ -310,7 +315,7 @@ export function ModelProviderPricingSection(props: {
       toast.success(t('Provider price saved successfully'))
       queryClient.invalidateQueries({ queryKey: modelProviderPriceQueryKeys.list(modelId) })
       queryClient.invalidateQueries({ queryKey: providerModelQueryKeys.all })
-      queryClient.invalidateQueries({ queryKey: ['model-square'] })
+      await invalidateModelSquareQueries(queryClient)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('Operation failed'))
     } finally {
@@ -334,7 +339,7 @@ export function ModelProviderPricingSection(props: {
       })
       queryClient.invalidateQueries({ queryKey: modelProviderPriceQueryKeys.list(modelId) })
       queryClient.invalidateQueries({ queryKey: providerModelQueryKeys.all })
-      queryClient.invalidateQueries({ queryKey: ['model-square'] })
+      await invalidateModelSquareQueries(queryClient)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('Operation failed'))
     } finally {

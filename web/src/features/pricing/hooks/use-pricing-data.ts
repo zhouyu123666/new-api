@@ -22,6 +22,7 @@ import { useMemo } from 'react'
 import { useStatus } from '@/hooks/use-status'
 
 import { getAllModelSquare, getPricing } from '../api'
+import { modelSquareQueryKeys } from '../lib/query-keys'
 import type { ModelSquareData, PricingData } from '../types'
 
 type UsePricingDataOptions = {
@@ -43,10 +44,11 @@ export function usePricingData(
     staleTime: 5 * 60 * 1000,
   })
   const modelSquareQuery = useQuery<ModelSquareData>({
-    queryKey: ['model-square'],
+    queryKey: modelSquareQueryKeys.list({ offset: 0, limit: 100 }),
     queryFn: getAllModelSquare,
     enabled: enabled && modelSquare,
-    staleTime: 5 * 60 * 1000,
+    staleTime: 30 * 1000,
+    refetchOnMount: 'always',
   })
   const isLoading = modelSquare
     ? modelSquareQuery.isLoading

@@ -16,9 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { type QueryClient } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
+
+import { invalidateModelSquareQueries } from '@/features/pricing/lib/query-keys'
 
 import { updateModelStatus, deleteModel as deleteModelAPI } from '../api'
 import { modelsQueryKeys } from './query-keys'
@@ -40,6 +42,7 @@ export async function handleEnableModel(
     if (response.success) {
       toast.success(i18next.t('Model enabled successfully'))
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      await invalidateModelSquareQueries(queryClient)
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t('Failed to enable model'))
@@ -64,6 +67,7 @@ export async function handleDisableModel(
     if (response.success) {
       toast.success(i18next.t('Model disabled successfully'))
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      await invalidateModelSquareQueries(queryClient)
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t('Failed to disable model'))
@@ -108,6 +112,7 @@ export async function handleDeleteModel(
     if (response.success) {
       toast.success(i18next.t('Model deleted successfully'))
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      await invalidateModelSquareQueries(queryClient)
       onSuccess?.()
     } else {
       toast.error(response.message || i18next.t('Failed to delete model'))
@@ -156,6 +161,7 @@ export async function handleBatchDeleteModels(
         })
       )
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      await invalidateModelSquareQueries(queryClient)
       onSuccess?.(successCount)
     }
 
@@ -208,6 +214,7 @@ export async function handleBatchEnableModels(
         })
       )
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      await invalidateModelSquareQueries(queryClient)
       onSuccess?.()
     }
 
@@ -256,6 +263,7 @@ export async function handleBatchDisableModels(
         })
       )
       queryClient?.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+      await invalidateModelSquareQueries(queryClient)
       onSuccess?.()
     }
 
