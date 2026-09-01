@@ -765,22 +765,33 @@ func buildConsumeLogStatQuery(startTimestamp int64, endTimestamp int64, modelNam
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, streamError bool, retry bool) (stat Stat, err error) {
-	baseQuery, err := buildConsumeLogStatQuery(startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, streamError, retry)
+	newStatQuery := func() (*gorm.DB, error) {
+		// Build a fresh statement for every aggregate. GORM sessions can still
+		// share statement clauses after chained Select/Where calls, which causes
+		// one aggregate query to overwrite another.
+		return buildConsumeLogStatQuery(startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, streamError, retry)
+	}
+	tx, err := newStatQuery()
 	if err != nil {
 		return stat, err
 	}
-	// GORM chain methods may reuse the statement when a query is chained more
-	// than once. Clone the filtered base query before adding different SELECT or
-	// WHERE clauses so aggregate queries do not leak into the COUNT queries.
-	newStatQuery := func() *gorm.DB {
-		return baseQuery.Session(&gorm.Session{})
-	}
-	tx := newStatQuery().Select("COALESCE(sum(quota), 0) quota")
+	tx = tx.Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := newStatQuery().Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
-	countQuery := newStatQuery()
-	fastQuery := newStatQuery().Where("fast_mode = ?", true)
+	rpmTpmQuery, err := newStatQuery()
+	if err != nil {
+		return stat, err
+	}
+	rpmTpmQuery = rpmTpmQuery.Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	countQuery, err := newStatQuery()
+	if err != nil {
+		return stat, err
+	}
+	fastQuery, err := newStatQuery()
+	if err != nil {
+		return stat, err
+	}
+	fastQuery = fastQuery.Where("fast_mode = ?", true)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -790,10 +801,16 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		common.SysError("failed to query log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	var rpmTpmStat struct {
+		Rpm int `gorm:"column:rpm"`
+		Tpm int `gorm:"column:tpm"`
+	}
+	if err := rpmTpmQuery.Scan(&rpmTpmStat).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm = rpmTpmStat.Rpm
+	stat.Tpm = rpmTpmStat.Tpm
 	if err := countQuery.Count(&stat.Total).Error; err != nil {
 		common.SysError("failed to query consume log count: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
