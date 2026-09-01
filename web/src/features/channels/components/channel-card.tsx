@@ -16,8 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useNavigate } from '@tanstack/react-router'
 import { flexRender, type Row } from '@tanstack/react-table'
-import { memo } from 'react'
+import { memo, useContext } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { GroupBadge } from '@/components/group-badge'
@@ -26,6 +27,8 @@ import { cn } from '@/lib/utils'
 import { CHANNEL_STATUS } from '../constants'
 import { isTagAggregateRow, parseGroupsList } from '../lib'
 import type { Channel } from '../types'
+import { ChannelHealthBar, ChannelInFlightBadge } from './channel-health-bar'
+import { ChannelHealthContext } from './channel-health-context'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 
@@ -47,7 +50,9 @@ function ChannelCardComponent({
   isSelected: boolean
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { sensitiveVisible } = useChannels()
+  const health = useContext(ChannelHealthContext)
   const isTagRow = isTagAggregateRow(row.original)
   const cells = row.getAllCells()
 
@@ -88,6 +93,19 @@ function ChannelCardComponent({
     (row.original.status !== CHANNEL_STATUS.ENABLED &&
       row.original.status !== CHANNEL_STATUS.MANUAL_DISABLED)
 
+  const handleHealthBlockClick = (blockStartTs: number) => {
+    void navigate({
+      to: '/usage-logs/$section',
+      params: { section: 'common' },
+      search: {
+        page: 1,
+        channel: String(row.original.id),
+        startTime: blockStartTs * 1000,
+        endTime: (blockStartTs + health.blockSeconds) * 1000 - 1,
+      },
+    })
+  }
+
   return (
     <ChannelRowActionsLayoutContext.Provider value='card'>
       <div
@@ -107,6 +125,26 @@ function ChannelCardComponent({
             {actionsCell}
           </div>
         </div>
+
+        {/* Row 2: availability over the rolling window. Kept adjacent to the
+          status badge like in table view, but full width so the blocks stay
+          readable. Tag rows aggregate many channels, so a single bar would be
+          ambiguous and is omitted, matching the table. */}
+        {!isTagRow && health.isLoaded && (
+          <div className='flex min-w-0 items-center gap-1.5'>
+            <ChannelInFlightBadge
+              count={health.byChannelId.get(row.original.id)?.in_flight ?? 0}
+            />
+            <ChannelHealthBar
+              className='min-w-0 flex-1'
+              buckets={health.byChannelId.get(row.original.id)?.buckets}
+              blockCount={health.blockCount}
+              blockSeconds={health.blockSeconds}
+              startTs={health.startTs}
+              onBlockClick={handleHealthBlockClick}
+            />
+          </div>
+        )}
 
         {/* Body: left column (id/name + balance) paired with a right-aligned
           column (priority/weight + response/test time). */}

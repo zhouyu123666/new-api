@@ -18,7 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
 import { useQueryClient } from '@tanstack/react-query'
-import type { ColumnDef } from '@tanstack/react-table'
+import { useNavigate } from '@tanstack/react-router'
+import type { ColumnDef, Row } from '@tanstack/react-table'
 import {
   AlertTriangle,
   ChevronDown,
@@ -77,6 +78,8 @@ import {
 } from '../lib'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
+import { ChannelHealthBar, ChannelInFlightBadge } from './channel-health-bar'
+import { ChannelHealthContext } from './channel-health-context'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -582,6 +585,145 @@ export function BalanceCell({ channel }: { channel: Channel }) {
 }
 
 /**
+ * Channel status: the enabled/disabled badge, the number of requests currently
+ * in flight, and the rolling availability bar of the recent time window.
+ */
+function ChannelStatusCell({ row }: { row: Row<Channel> }) {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const health = useContext(ChannelHealthContext)
+  const layout = useContext(ChannelRowActionsLayoutContext)
+  const status = row.getValue('status') as number
+  const channel = row.original
+
+  // Tag rows aggregate many channels, so a single availability bar would be
+  // ambiguous; they keep the plain aggregate badge.
+  if (isTagAggregateRow(channel)) {
+    const childrenCount = (channel as TagRow).children?.length || 0
+    const hasEnabled = status === 1
+    return (
+      <StatusBadge
+        label={
+          hasEnabled
+            ? `Active (${childrenCount})`
+            : `Inactive (${childrenCount})`
+        }
+        variant={hasEnabled ? 'success' : 'neutral'}
+        size='sm'
+        copyable={false}
+        className='-ml-1.5'
+      />
+    )
+  }
+
+  const config =
+    CHANNEL_STATUS_CONFIG[status as keyof typeof CHANNEL_STATUS_CONFIG] ||
+    CHANNEL_STATUS_CONFIG[0]
+
+  const isMultiKey = isMultiKeyChannel(channel)
+  const keySize = channel.channel_info?.multi_key_size ?? 0
+  const disabledCount = channel.channel_info?.multi_key_status_list
+    ? Object.keys(channel.channel_info.multi_key_status_list).length
+    : 0
+  const enabledCount = Math.max(0, keySize - disabledCount)
+  const label =
+    isMultiKey && keySize > 0
+      ? `${t(config.label)} (${enabledCount}/${keySize})`
+      : t(config.label)
+
+  let statusReason = ''
+  let statusTime = ''
+  if (status === 3) {
+    try {
+      const otherInfo = channel.other_info
+        ? JSON.parse(channel.other_info)
+        : null
+      if (otherInfo) {
+        statusReason = otherInfo.status_reason || ''
+        statusTime = otherInfo.status_time
+          ? formatTimestampToDate(otherInfo.status_time)
+          : ''
+      }
+    } catch {
+      /* empty */
+    }
+  }
+
+  const badge = (
+    <StatusBadge
+      label={label}
+      variant={config.variant}
+      size='sm'
+      copyable={false}
+    />
+  )
+
+  const labelledBadge =
+    statusReason || statusTime ? (
+      <TooltipProvider delay={100}>
+        <Tooltip>
+          <TooltipTrigger render={<span />}>{badge}</TooltipTrigger>
+          <TooltipContent side='top' className='max-w-xs'>
+            <div className='space-y-1 text-xs'>
+              {statusReason && (
+                <div>
+                  {t('Reason:')} {statusReason}
+                </div>
+              )}
+              {statusTime && (
+                <div>
+                  {t('Time:')} {statusTime}
+                </div>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    ) : (
+      badge
+    )
+
+  // The card view drops this cell entirely for plain enabled/disabled channels,
+  // because its power toggle already conveys that. So it renders the bar and the
+  // in-flight count itself, in a dedicated full-width row.
+  if (layout === 'card') {
+    return labelledBadge
+  }
+
+  const healthItem = health.byChannelId.get(channel.id)
+  const handleHealthBlockClick = (blockStartTs: number) => {
+    void navigate({
+      to: '/usage-logs/$section',
+      params: { section: 'common' },
+      search: {
+        page: 1,
+        channel: String(channel.id),
+        startTime: blockStartTs * 1000,
+        endTime: (blockStartTs + health.blockSeconds) * 1000 - 1,
+      },
+    })
+  }
+
+  return (
+    <div className='flex flex-col gap-1.5 py-2'>
+      <div className='flex items-center gap-1.5'>
+        {labelledBadge}
+        <ChannelInFlightBadge count={healthItem?.in_flight ?? 0} />
+      </div>
+      {health.isLoaded && (
+        <ChannelHealthBar
+          buckets={healthItem?.buckets}
+          blockCount={health.blockCount}
+          blockSeconds={health.blockSeconds}
+          startTs={health.startTs}
+          onBlockClick={handleHealthBlockClick}
+        />
+      )}
+    </div>
+  )
+}
+
+/**
  * Generate channels columns configuration
  */
 export function useChannelsColumns(
@@ -901,115 +1043,7 @@ export function useChannelsColumns(
         accessorKey: 'status',
         header: t('Status'),
         meta: { mobileBadge: true },
-        cell: ({ row }) => {
-          const isTagRow = isTagAggregateRow(row.original)
-          const status = row.getValue('status') as number
-          const channel = row.original as Channel
-
-          // Tag row: show aggregated status
-          if (isTagRow) {
-            const childrenCount = (row.original as TagRow).children?.length || 0
-            const hasEnabled = status === 1
-
-            if (hasEnabled) {
-              return (
-                <StatusBadge
-                  label={`Active (${childrenCount})`}
-                  variant='success'
-                  size='sm'
-                  copyable={false}
-                  className='-ml-1.5'
-                />
-              )
-            } else {
-              return (
-                <StatusBadge
-                  label={`Inactive (${childrenCount})`}
-                  variant='neutral'
-                  size='sm'
-                  copyable={false}
-                  className='-ml-1.5'
-                />
-              )
-            }
-          }
-
-          // Regular channel row
-          const config =
-            CHANNEL_STATUS_CONFIG[
-              status as keyof typeof CHANNEL_STATUS_CONFIG
-            ] || CHANNEL_STATUS_CONFIG[0]
-
-          const isMultiKey = isMultiKeyChannel(channel)
-          const keySize = channel.channel_info?.multi_key_size ?? 0
-          const disabledCount = channel.channel_info?.multi_key_status_list
-            ? Object.keys(channel.channel_info.multi_key_status_list).length
-            : 0
-          const enabledCount = Math.max(0, keySize - disabledCount)
-          const label =
-            isMultiKey && keySize > 0
-              ? `${t(config.label)} (${enabledCount}/${keySize})`
-              : t(config.label)
-
-          // Auto-disabled: show reason and time tooltip
-          if (status === 3) {
-            let statusReason = ''
-            let statusTime = ''
-            try {
-              const otherInfo = channel.other_info
-                ? JSON.parse(channel.other_info)
-                : null
-              if (otherInfo) {
-                statusReason = otherInfo.status_reason || ''
-                statusTime = otherInfo.status_time
-                  ? formatTimestampToDate(otherInfo.status_time)
-                  : ''
-              }
-            } catch {
-              /* empty */
-            }
-
-            if (statusReason || statusTime) {
-              return (
-                <TooltipProvider delay={100}>
-                  <Tooltip>
-                    <TooltipTrigger render={<span />}>
-                      <StatusBadge
-                        label={label}
-                        variant={config.variant}
-                        size='sm'
-                        copyable={false}
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent side='top' className='max-w-xs'>
-                      <div className='space-y-1 text-xs'>
-                        {statusReason && (
-                          <div>
-                            {t('Reason:')} {statusReason}
-                          </div>
-                        )}
-                        {statusTime && (
-                          <div>
-                            {t('Time:')} {statusTime}
-                          </div>
-                        )}
-                      </div>
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )
-            }
-          }
-
-          return (
-            <StatusBadge
-              label={label}
-              variant={config.variant}
-              size='sm'
-              copyable={false}
-            />
-          )
-        },
+        cell: ({ row }) => <ChannelStatusCell row={row} />,
         filterFn: (row, id, value) => {
           if (!value || value.length === 0 || value.includes('all')) {
             return true
@@ -1023,7 +1057,7 @@ export function useChannelsColumns(
           }
           return false
         },
-        size: 120,
+        size: 260,
         enableSorting: false,
       },
 

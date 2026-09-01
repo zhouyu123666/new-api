@@ -21,11 +21,26 @@ import z from 'zod'
 
 import { UsageLogs } from '@/features/usage-logs'
 import {
+  LOG_TYPE_RETRY_VALUE,
+  LOG_TYPE_STREAM_ERROR_VALUE,
+} from '@/features/usage-logs/constants'
+import {
   isUsageLogsSectionId,
   USAGE_LOGS_DEFAULT_SECTION,
 } from '@/features/usage-logs/section-registry'
 
-const logTypeValues = ['0', '1', '2', '3', '4', '5', '6', '7'] as const
+const logTypeValues = [
+  '0',
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  LOG_TYPE_STREAM_ERROR_VALUE,
+  LOG_TYPE_RETRY_VALUE,
+] as const
 const logTypeSearchSchema = z
   .preprocess((value) => {
     if (value == null || value === '') return undefined

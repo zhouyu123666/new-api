@@ -13,6 +13,7 @@ import (
 
 	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/observability"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -23,6 +24,9 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ApplyUpstreamBodyMetadata restores metadata that net/http cannot infer from
@@ -529,12 +533,26 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	providerCtx := c.Request.Context()
+	var providerSpan trace.Span
+	otelRuntime := observability.FromContext(providerCtx)
+	if otelRuntime != nil {
+		providerCtx, providerSpan = otelRuntime.StartProviderRequest(providerCtx, info, req)
+		req = req.WithContext(providerCtx)
+		otelRuntime.Inject(providerCtx, req)
+	}
 	resp, err := relayClient.Do(req)
 	if err != nil {
+		if otelRuntime != nil {
+			otelRuntime.FinishSpan(providerSpan, err)
+		}
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
+		if otelRuntime != nil {
+			otelRuntime.FinishSpan(providerSpan, errors.New("resp is nil"))
+		}
 		return nil, errors.New("resp is nil")
 	}
 	if common2.DebugEnabled {
@@ -551,6 +569,19 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
 		c.Set(common2.UpstreamRequestIdKey, upID)
+		if otelRuntime != nil {
+			providerSpan.SetAttributes(attribute.String("new_api.upstream_request_id", upID))
+		}
+	}
+	if otelRuntime != nil {
+		providerSpan.SetAttributes(attribute.Int("http.response.status_code", resp.StatusCode))
+		if resp.StatusCode >= http.StatusBadRequest {
+			providerSpan.SetStatus(codes.Error, resp.Status)
+		}
+		otelRuntime.FinishSpan(providerSpan, nil)
+	}
+	if otelRuntime != nil && !info.IsStream {
+		resp.Body = otelRuntime.WrapResponseBody(c.Request.Context(), resp.Body)
 	}
 
 	_ = req.Body.Close()

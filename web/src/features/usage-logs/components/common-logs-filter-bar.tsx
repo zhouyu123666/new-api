@@ -38,7 +38,12 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 
-import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
+import {
+  LOG_TYPE_ALL_VALUE,
+  LOG_TYPE_FILTERS,
+  LOG_TYPE_RETRY_VALUE,
+  getLogTypeFilters,
+} from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
@@ -68,13 +73,17 @@ function isLogTypeValue(value: string): value is LogTypeValue {
   return logTypeValueSet.has(value)
 }
 
-function getLogTypeValue(value: unknown): LogTypeValue {
-  return Array.isArray(value) &&
+function getLogTypeValue(value: unknown, allowRetry: boolean): LogTypeValue {
+  const logType =
+    Array.isArray(value) &&
     value.length === 1 &&
     typeof value[0] === 'string' &&
     isLogTypeValue(value[0])
-    ? value[0]
-    : LOG_TYPE_ALL_VALUE
+      ? value[0]
+      : LOG_TYPE_ALL_VALUE
+  return !allowRetry && logType === LOG_TYPE_RETRY_VALUE
+    ? LOG_TYPE_ALL_VALUE
+    : logType
 }
 
 function buildSearchSourceKey(values: {
@@ -88,6 +97,7 @@ function buildSearchSourceKey(values: {
   requestId?: unknown
   upstreamRequestId?: unknown
   type?: unknown
+  isAdminView?: unknown
 }) {
   return [
     values.startTime,
@@ -100,6 +110,7 @@ function buildSearchSourceKey(values: {
     values.requestId,
     values.upstreamRequestId,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
+    values.isAdminView,
   ]
     .map((value) => String(value ?? ''))
     .join('\u001f')
@@ -133,6 +144,7 @@ export function CommonLogsFilterBar<TData>(
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
       type: searchParams.type,
+      isAdminView: isAdmin,
     }
     const filters: CommonLogFilters = {
       startTime: searchParams.startTime
@@ -150,7 +162,7 @@ export function CommonLogsFilterBar<TData>(
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
       filters,
-      logType: getLogTypeValue(searchParams.type),
+      logType: getLogTypeValue(searchParams.type, isAdmin),
     }
   }, [
     searchParams.startTime,
@@ -163,6 +175,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.requestId,
     searchParams.upstreamRequestId,
     searchParams.type,
+    isAdmin,
   ])
   const [draft, setDraft] = useState<CommonLogDraft>(() => searchState)
   const activeDraft =
@@ -256,11 +269,11 @@ export function CommonLogsFilterBar<TData>(
     : '[-webkit-text-security:disc]'
   const logTypeItems = useMemo(
     () =>
-      LOG_TYPE_FILTERS.map((type) => ({
+      getLogTypeFilters(isAdmin).map((type) => ({
         value: type.value,
         label: t(type.label),
       })),
-    [t]
+    [isAdmin, t]
   )
   const logTypeLabel =
     logTypeItems.find((type) => type.value === logType)?.label ?? t('All Types')
@@ -350,9 +363,9 @@ export function CommonLogsFilterBar<TData>(
         </SelectTrigger>
         <SelectContent alignItemWithTrigger={false}>
           <SelectGroup>
-            {LOG_TYPE_FILTERS.map((type) => (
+            {logTypeItems.map((type) => (
               <SelectItem key={type.value} value={type.value}>
-                {t(type.label)}
+                {type.label}
               </SelectItem>
             ))}
           </SelectGroup>

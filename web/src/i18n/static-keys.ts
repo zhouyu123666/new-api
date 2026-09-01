@@ -61,6 +61,8 @@ export const STATIC_I18N_KEYS = [
   'Per Request',
   'Task billing',
   'All Types',
+  'Stream Error',
+  'Requests with Retries',
   'Chat',
   'Response',
   'Anthropic',

@@ -23,6 +23,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/observability"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/relay"
@@ -60,6 +61,21 @@ func main() {
 	if err != nil {
 		common.FatalLog("failed to initialize resources: " + err.Error())
 		return
+	}
+	otelRuntime, err := observability.NewFromEnv()
+	if err != nil {
+		common.FatalLog("failed to initialize OpenTelemetry: " + err.Error())
+		return
+	}
+	if otelRuntime.Enabled() {
+		common.SysLog("OpenTelemetry Langfuse tracing enabled")
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := otelRuntime.Shutdown(shutdownCtx); err != nil {
+				common.SysError("failed to flush OpenTelemetry: " + err.Error())
+			}
+		}()
 	}
 
 	common.SysLog("New API " + common.Version + " started")
@@ -193,6 +209,7 @@ func main() {
 	// This will cause SSE not to work!!!
 	//server.Use(gzip.Gzip(gzip.DefaultCompression))
 	server.Use(middleware.RequestId())
+	server.Use(otelRuntime.Middleware())
 	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
 	middleware.SetUpLogger(server)

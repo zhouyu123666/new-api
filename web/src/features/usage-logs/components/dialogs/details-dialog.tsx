@@ -680,6 +680,28 @@ export function DetailsDialog(props: DetailsDialogProps) {
               mono
             />
           )}
+          {props.isAdmin && adminInfo?.otel_trace_id && (
+            <DetailRow
+              label={t('OTel Trace ID')}
+              value={adminInfo.otel_trace_id}
+              mono
+            />
+          )}
+          {props.isAdmin && adminInfo?.langfuse_trace_url && (
+            <DetailRow
+              label={t('Langfuse Trace')}
+              value={
+                <a
+                  href={adminInfo.langfuse_trace_url}
+                  target='_blank'
+                  rel='noreferrer'
+                  className='text-primary underline underline-offset-2'
+                >
+                  {t('Open Langfuse Trace')}
+                </a>
+              }
+            />
+          )}
 
           {props.log.provider_slug && (
             <DetailRow

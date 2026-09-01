@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/observability"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -39,28 +40,34 @@ func appendToolSurchargeLogInfo(other map[string]interface{}, items []ToolSurcha
 }
 
 type textQuotaSummary struct {
-	PromptTokens           int
-	CompletionTokens       int
-	TotalTokens            int
-	CacheTokens            int
-	CacheCreationTokens    int
-	CacheCreationTokens5m  int
-	CacheCreationTokens1h  int
-	ImageTokens            int
-	AudioTokens            int
-	ModelName              string
-	TokenName              string
-	UseTimeSeconds         int64
-	CompletionRatio        float64
-	CacheRatio             float64
-	ImageRatio             float64
-	ModelRatio             float64
-	GroupRatio             float64
-	ModelPrice             float64
-	CacheCreationRatio     float64
-	CacheCreationRatio5m   float64
-	CacheCreationRatio1h   float64
-	Quota                  int
+	PromptTokens          int
+	CompletionTokens      int
+	TotalTokens           int
+	CacheTokens           int
+	CacheCreationTokens   int
+	CacheCreationTokens5m int
+	CacheCreationTokens1h int
+	ImageTokens           int
+	AudioTokens           int
+	ModelName             string
+	TokenName             string
+	UseTimeSeconds        int64
+	CompletionRatio       float64
+	CacheRatio            float64
+	ImageRatio            float64
+	ModelRatio            float64
+	GroupRatio            float64
+	ModelPrice            float64
+	CacheCreationRatio    float64
+	CacheCreationRatio5m  float64
+	CacheCreationRatio1h  float64
+	Quota                 int
+	// InputQuota and OutputQuota are the exact pre-rounding quota components
+	// for ratio billing. They are used only to expose a truthful USD split to
+	// Langfuse; the rounded Quota remains the billing source of truth.
+	InputQuota             decimal.Decimal
+	OutputQuota            decimal.Decimal
+	CostSplit              bool
 	IsClaudeUsageSemantic  bool
 	UsageSemantic          string
 	AudioInputPrice        float64
@@ -243,6 +250,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		CacheCreationRatio5m: relayInfo.PriceData.CacheCreation5mRatio,
 		CacheCreationRatio1h: relayInfo.PriceData.CacheCreation1hRatio,
 		UsageSemantic:        usageSemanticFromUsage(relayInfo, usage),
+		CostSplit:            !relayInfo.PriceData.UsePrice && relayInfo.TieredBillingSnapshot == nil,
 	}
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
@@ -354,16 +362,30 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 
 		promptQuota := baseTokens.Add(cachedTokensWithRatio).Add(imageTokensWithRatio).Add(cachedCreationTokensWithRatio)
 		completionQuota := dCompletionTokens.Mul(dCompletionRatio)
-		quotaCalculateDecimal := promptQuota.Add(completionQuota).Mul(ratio)
-		quotaCalculateDecimal = quotaCalculateDecimal.Add(audioInputQuota)
-		quotaCalculateDecimal = relayInfo.PriceData.ApplyOtherRatiosToDecimal(quotaCalculateDecimal)
-		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
+		inputQuota := promptQuota.Mul(ratio).Add(audioInputQuota)
+		outputQuota := completionQuota.Mul(ratio)
+		inputQuota = relayInfo.PriceData.ApplyOtherRatiosToDecimal(inputQuota)
+		outputQuota = relayInfo.PriceData.ApplyOtherRatiosToDecimal(outputQuota)
+		quotaCalculateDecimal := inputQuota.Add(outputQuota).Add(summary.ToolCallSurchargeQuota)
+		if summary.CostSplit {
+			// Tool calls are an input-side gateway surcharge for observability
+			// purposes. This keeps input + output = the exact pre-rounding total
+			// without pretending that a tool has model output tokens.
+			summary.InputQuota = inputQuota.Add(summary.ToolCallSurchargeQuota)
+			summary.OutputQuota = outputQuota
+		}
 
 		if !ratio.IsZero() && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
 			quotaCalculateDecimal = decimal.NewFromInt(1)
+			summary.CostSplit = false
 		}
 		quota, clamp := common.QuotaFromDecimalChecked(quotaCalculateDecimal)
 		summary.Quota = quota
+		if clamp != nil || (!ratio.IsZero() && quota == 0) {
+			// A saturated or minimum-charge result has no stable component split.
+			// Emit only the authoritative final total in that case.
+			summary.CostSplit = false
+		}
 		noteQuotaClamp(relayInfo, clamp)
 	} else {
 		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerUnit).Mul(dGroupRatio)
@@ -372,6 +394,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
 		quota, clamp := common.QuotaFromDecimalChecked(quotaCalculateDecimal)
 		summary.Quota = quota
+		summary.CostSplit = false
 		noteQuotaClamp(relayInfo, clamp)
 	}
 
@@ -392,6 +415,38 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 		return "anthropic"
 	}
 	return "openai"
+}
+
+func textBillingCostDetails(summary textQuotaSummary, hasActualUsage bool) *observability.BillingCostDetails {
+	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) || summary.Quota < 0 {
+		return nil
+	}
+	if hasActualUsage && !summary.hasBillableUsage() {
+		return nil
+	}
+	if !hasActualUsage && summary.Quota == 0 {
+		return nil
+	}
+	totalUSD := float64(summary.Quota) / common.QuotaPerUnit
+	if !hasActualUsage || !summary.CostSplit {
+		return &observability.BillingCostDetails{TotalUSD: totalUSD}
+	}
+	inputUSD := summary.InputQuota.InexactFloat64() / common.QuotaPerUnit
+	outputUSD := summary.OutputQuota.InexactFloat64() / common.QuotaPerUnit
+	if inputUSD < 0 || outputUSD < 0 || math.IsNaN(inputUSD) || math.IsNaN(outputUSD) || math.IsInf(inputUSD, 0) || math.IsInf(outputUSD, 0) {
+		return &observability.BillingCostDetails{TotalUSD: totalUSD}
+	}
+	// The final quota is rounded to the database unit. If component rounding,
+	// saturation, or a malformed ratio makes the split disagree materially
+	// with that authoritative total, do not publish contradictory values.
+	if math.Abs(inputUSD+outputUSD-totalUSD) > 1/common.QuotaPerUnit {
+		return &observability.BillingCostDetails{TotalUSD: totalUSD}
+	}
+	return &observability.BillingCostDetails{
+		InputUSD:  &inputUSD,
+		OutputUSD: &outputUSD,
+		TotalUSD:  totalUSD,
+	}
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
@@ -450,6 +505,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
+	}
+	if ctx != nil && ctx.Request != nil {
+		if runtime := observability.FromContext(ctx.Request.Context()); runtime != nil {
+			runtime.RecordUsageWithCosts(ctx.Request.Context(), summary.PromptTokens, summary.CompletionTokens, summary.TotalTokens, summary.Quota, summary.ModelPrice, relayInfo.PriceData.UsePrice, textBillingCostDetails(summary, originUsage != nil))
+		}
 	}
 
 	logModel := summary.ModelName

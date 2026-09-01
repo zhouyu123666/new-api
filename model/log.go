@@ -516,7 +516,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string, streamError bool, retry bool) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB
@@ -551,6 +551,8 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
+	tx = applyStreamErrorFilter(tx, "logs.other", streamError)
+	tx = applyRetryFilter(tx, "logs.other", retry)
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {
 		return nil, 0, err
@@ -612,7 +614,69 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+// applyStreamErrorFilter restricts logs to records whose generated stream
+// status object reports an error. The Other column is text on all supported
+// databases, so each dialect uses its native JSON extractor while guarding
+// against legacy rows with an empty or invalid Other value.
+func applyStreamErrorFilter(tx *gorm.DB, column string, enabled bool) *gorm.DB {
+	if !enabled {
+		return tx
+	}
+
+	switch common.LogDatabaseType() {
+	case common.DatabaseTypeSQLite:
+		return tx.Where(
+			"json_extract(CASE WHEN json_valid("+column+") THEN "+column+" ELSE '{}' END, '$.stream_status.status') = ?",
+			"error",
+		)
+	case common.DatabaseTypeMySQL:
+		return tx.Where(
+			"JSON_UNQUOTE(JSON_EXTRACT(CASE WHEN JSON_VALID("+column+") THEN "+column+" ELSE '{}' END, '$.stream_status.status')) = ?",
+			"error",
+		)
+	case common.DatabaseTypePostgreSQL:
+		return tx.Where(
+			"CASE WHEN "+column+" ~ '^\\s*\\{.*\\}\\s*$' THEN ("+column+"::jsonb -> 'stream_status' ->> 'status') ELSE NULL END = ?",
+			"error",
+		)
+	case common.DatabaseTypeClickHouse:
+		return tx.Where("JSONExtractString("+column+", 'stream_status', 'status') = ?", "error")
+	default:
+		common.SysError("stream error filter unsupported on log database type: " + string(common.LogDatabaseType()))
+		return tx.Where("1 = 0")
+	}
+}
+
+// applyRetryFilter restricts logs to requests that attempted more than one
+// channel. Relay logs persist the attempted channel IDs in
+// Other.admin_info.use_channel.
+func applyRetryFilter(tx *gorm.DB, column string, enabled bool) *gorm.DB {
+	if !enabled {
+		return tx
+	}
+
+	switch common.LogDatabaseType() {
+	case common.DatabaseTypeSQLite:
+		return tx.Where(
+			"json_array_length(json_extract(CASE WHEN json_valid(" + column + ") THEN " + column + " ELSE '{}' END, '$.admin_info.use_channel')) > 1",
+		)
+	case common.DatabaseTypeMySQL:
+		return tx.Where(
+			"JSON_LENGTH(JSON_EXTRACT(CASE WHEN JSON_VALID(" + column + ") THEN " + column + " ELSE '{}' END, '$.admin_info.use_channel')) > 1",
+		)
+	case common.DatabaseTypePostgreSQL:
+		return tx.Where(
+			"CASE WHEN " + column + " ~ '^\\s*\\{.*\\}\\s*$' AND jsonb_typeof(" + column + "::jsonb -> 'admin_info' -> 'use_channel') = 'array' THEN jsonb_array_length(" + column + "::jsonb -> 'admin_info' -> 'use_channel') ELSE 0 END > 1",
+		)
+	case common.DatabaseTypeClickHouse:
+		return tx.Where("length(JSONExtractArrayRaw(" + column + ", 'admin_info', 'use_channel')) > 1")
+	default:
+		common.SysError("retry filter unsupported on log database type: " + string(common.LogDatabaseType()))
+		return tx.Where("1 = 0")
+	}
+}
+
+func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string, streamError bool, retry bool) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
 		tx = LOG_DB.Where("logs.user_id = ?", userId)
@@ -641,6 +705,8 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	if group != "" {
 		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
+	tx = applyStreamErrorFilter(tx, "logs.other", streamError)
+	tx = applyRetryFilter(tx, "logs.other", retry)
 	err = tx.Model(&Log{}).Limit(logSearchCountLimit).Count(&total).Error
 	if err != nil {
 		common.SysError("failed to count user logs: " + err.Error())
@@ -669,7 +735,7 @@ type Stat struct {
 	FastRatio float64 `json:"fast_ratio"`
 }
 
-func buildConsumeLogStatQuery(startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (*gorm.DB, error) {
+func buildConsumeLogStatQuery(startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, streamError bool, retry bool) (*gorm.DB, error) {
 	tx := LOG_DB.Table("logs").Where("type = ?", LogTypeConsume)
 	var err error
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
@@ -693,11 +759,13 @@ func buildConsumeLogStatQuery(startTimestamp int64, endTimestamp int64, modelNam
 	if group != "" {
 		tx = tx.Where(logGroupCol+" = ?", group)
 	}
+	tx = applyStreamErrorFilter(tx, "logs.other", streamError)
+	tx = applyRetryFilter(tx, "logs.other", retry)
 	return tx, nil
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	baseQuery, err := buildConsumeLogStatQuery(startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string, streamError bool, retry bool) (stat Stat, err error) {
+	baseQuery, err := buildConsumeLogStatQuery(startTimestamp, endTimestamp, modelName, username, tokenName, channel, group, streamError, retry)
 	if err != nil {
 		return stat, err
 	}
