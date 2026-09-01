@@ -95,7 +95,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 :root {
   --radius: 1rem;
-  --app-header-height: 3rem;
+  --app-header-height: 3.5rem;
   /* Static build-channel fallback consumed when JS hasn't booted yet. */
   --app-rev: '2k6e8r7p';
   /* Currently active body font. The font axis swaps this between
