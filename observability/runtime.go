@@ -63,6 +63,15 @@ type traceState struct {
 	inputTrunc  bool
 	outputTrunc bool
 	maxBytes    int64
+
+	// apiType is the upstream API type of the relayed request, or
+	// apiTypeUnknown. It decides which stream aggregators are offered the
+	// first frame first.
+	apiType int
+
+	// streamAgg rebuilds the answer of a streamed response. It is chosen from
+	// the first recognized frame and owns every frame after that.
+	streamAgg streamAggregator
 }
 
 // BillingCostDetails describes the gateway-side USD amount associated with a
@@ -183,7 +192,13 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 	if !r.Enabled() {
 		return ctx, trace.SpanFromContext(ctx)
 	}
-	state := &traceState{maxBytes: r.captureMaxBytes}
+	// The channel is not always resolved yet, and its API type is only a hint
+	// for picking a stream aggregator.
+	apiType := apiTypeUnknown
+	if info != nil && info.HasChannelMeta() {
+		apiType = info.ApiType
+	}
+	state := &traceState{maxBytes: r.captureMaxBytes, apiType: apiType}
 	spanAttrs := []attribute.KeyValue{
 		attribute.String("gen_ai.operation.name", "chat"),
 		attribute.String("gen_ai.request.model", info.OriginModelName),
@@ -266,7 +281,7 @@ func (r *Runtime) RecordStreamChunk(ctx context.Context, data string) {
 	if state == nil {
 		return
 	}
-	state.addOutput(state.span, []byte(data))
+	state.recordStreamEvent(data)
 }
 
 func (r *Runtime) WrapResponseBody(ctx context.Context, body io.ReadCloser) io.ReadCloser {
@@ -395,6 +410,7 @@ func (r *Runtime) FinishLLM(ctx context.Context, span trace.Span, err error, inf
 	}
 	if state := stateFromContext(ctx); state != nil {
 		state.mu.Lock()
+		state.finalizeStreamOutput(span)
 		if state.input.Len() > 0 {
 			span.SetAttributes(
 				attribute.String("gen_ai.input.messages", state.input.String()),
@@ -475,6 +491,10 @@ func (s *traceState) addInput(span trace.Span, data []byte) {
 func (s *traceState) addOutput(span trace.Span, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.writeOutputLocked(span, data)
+}
+
+func (s *traceState) writeOutputLocked(span trace.Span, data []byte) {
 	if s.outputTrunc {
 		return
 	}
@@ -488,6 +508,54 @@ func (s *traceState) addOutput(span trace.Span, data []byte) {
 		return
 	}
 	s.output.Write(data)
+}
+
+// recordStreamEvent consumes stream frames without exporting them
+// individually. The first recognized frame picks the aggregator for the
+// upstream protocol, and FinishLLM turns what that aggregator collected into a
+// single output value.
+func (s *traceState) recordStreamEvent(data string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streamAgg != nil {
+		s.streamAgg.accept(data)
+		return
+	}
+	// The upstream API type decides which protocols are tried first. A frame
+	// none of them recognizes is still offered to the rest, so an upstream
+	// speaking a protocol its API type does not advertise keeps its output.
+	for _, preferred := range []bool{true, false} {
+		for _, entry := range streamAggregators {
+			if entry.preferredFor(s.apiType) != preferred {
+				continue
+			}
+			aggregator := entry.newAggregator(s.maxBytes)
+			if aggregator.accept(data) {
+				s.streamAgg = aggregator
+				return
+			}
+		}
+	}
+}
+
+func (s *traceState) finalizeStreamOutput(span trace.Span) {
+	if s.streamAgg == nil {
+		return
+	}
+	out := s.streamAgg.output()
+	s.output.Reset()
+	if len(out.value) == 0 {
+		return
+	}
+	if !out.selfCapped {
+		s.writeOutputLocked(span, out.value)
+		return
+	}
+	if out.truncated {
+		s.outputTrunc = true
+		span.SetAttributes(attribute.Bool("new_api.capture.output_truncated", true))
+	}
+	s.output.Write(out.value)
 }
 
 func resolveExporterConfig(host string) (string, map[string]string, error) {

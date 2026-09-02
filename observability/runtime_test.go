@@ -3,11 +3,13 @@ package observability
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	rootcommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -123,6 +125,241 @@ func TestStartLLMRequestCapturesInputAndUsage(t *testing.T) {
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.usage_details").AsString())
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "new_api.billing.gateway_cost_usd").AsString())
 	require.JSONEq(t, `{"total":0.000084}`, attributeValue(spans[0].Attributes, "langfuse.observation.cost_details").AsString())
+}
+
+func TestRecordStreamChunkCapturesOneFinalJSONEvent(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-stream-output", OriginModelName: "gpt-test", RelayFormat: "openai", IsStream: true}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	events := []string{
+		`{"type":"response.created","response":{"id":"resp_1","model":"gpt-test"}}`,
+		`{"type":"response.in_progress","response":{"id":"resp_1","model":"gpt-test"}}`,
+		`{"type":"response.output_text.delta","delta":"hello"}`,
+		`{"type":"response.output_text.done","text":"hello"}`,
+		`{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}]}}`,
+	}
+	for _, event := range events {
+		runtime.RecordStreamChunk(ctx, event)
+	}
+	runtime.RecordStreamChunk(ctx, `{"type":"response.output_text.delta","delta":"late"}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	output := attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString()
+	require.JSONEq(t, events[len(events)-1], output)
+	require.NotContains(t, output, "response.created")
+	require.NotContains(t, output, "response.output_text.delta")
+}
+
+func TestRecordStreamChunkFallsBackToDeltaWhenCompletedOutputIsEmpty(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-empty-completed-output", OriginModelName: "gpt-test", RelayFormat: "openai", IsStream: true}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	runtime.RecordStreamChunk(ctx, `{"type":"response.created","response":{"id":"resp_1"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"response.output_text.delta","delta":"hello "}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"response.output_text.delta","delta":"from delta"}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[]}}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	output := attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString()
+	var got map[string]any
+	require.NoError(t, rootcommon.UnmarshalJsonStr(output, &got))
+	require.Equal(t, "response.completed", got["type"])
+	require.JSONEq(t, responsesAssistantOutputJSON("hello from delta"), mustJSON(t, got["response"].(map[string]any)["output"]))
+}
+
+func TestRecordStreamChunkKeepsPartialResponsesOutput(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-incomplete-stream", OriginModelName: "gpt-test", RelayFormat: "openai", IsStream: true}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	runtime.RecordStreamChunk(ctx, `{"type":"response.output_text.delta","delta":"partial"}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.JSONEq(t,
+		responsesAssistantOutputJSON("partial"),
+		attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString(),
+	)
+}
+
+func TestRecordStreamChunkAggregatesChatCompletionsDeltas(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-chat-stream", OriginModelName: "gpt-test", RelayFormat: "openai", IsStream: true}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	runtime.RecordStreamChunk(ctx, `{"id":"c1","choices":[{"index":0,"delta":{"role":"assistant","content":""}}]}`)
+	runtime.RecordStreamChunk(ctx, `{"id":"c1","choices":[{"index":0,"delta":{"content":"hello "}}]}`)
+	runtime.RecordStreamChunk(ctx, `{"id":"c1","choices":[{"index":0,"delta":{"content":"world"}}]}`)
+	runtime.RecordStreamChunk(ctx, `{"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`)
+	runtime.RecordStreamChunk(ctx, `{"id":"c1","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.JSONEq(t,
+		`[{"role":"assistant","content":"hello world"}]`,
+		attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString(),
+	)
+}
+
+func TestRecordStreamChunkAggregatesLegacyCompletionsText(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-completions-stream", OriginModelName: "gpt-test", RelayFormat: "openai", IsStream: true}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	runtime.RecordStreamChunk(ctx, `{"choices":[{"text":"once ","finish_reason":""}]}`)
+	runtime.RecordStreamChunk(ctx, `{"choices":[{"text":"upon","finish_reason":"stop"}]}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.JSONEq(t,
+		`[{"role":"assistant","content":"once upon"}]`,
+		attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString(),
+	)
+}
+
+func TestRecordStreamChunkRebuildsClaudeTextMessage(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-claude-stream", OriginModelName: "claude-test", RelayFormat: "claude", IsStream: true, ChannelMeta: &common.ChannelMeta{ApiType: constant.APITypeAnthropic}}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	runtime.RecordStreamChunk(ctx, `{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[]}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello "}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_stop","index":0}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"message_delta","delta":{"stop_reason":"end_turn"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"message_stop"}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.JSONEq(t,
+		`[{"role":"assistant","content":"hello world"}]`,
+		attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString(),
+	)
+}
+
+// TestRecordStreamChunkRebuildsClaudeThinkingAndToolUse also covers the
+// fallback dispatch pass: the relay info claims the default OpenAI API type,
+// so the Claude aggregator is only reached because a frame no preferred
+// aggregator recognized is still offered to the rest.
+func TestRecordStreamChunkRebuildsClaudeThinkingAndToolUse(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+	runtime := &Runtime{
+		enabled:         true,
+		captureContent:  true,
+		captureMaxBytes: 1024,
+		tracerProvider:  provider,
+		tracer:          provider.Tracer("test"),
+		propagator:      propagationTraceContextForTest(),
+	}
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	info := &common.RelayInfo{RequestId: "req-claude-tool", OriginModelName: "claude-test", RelayFormat: "claude", IsStream: true}
+	ctx, span := runtime.StartLLMRequest(context.Background(), info, nil)
+	runtime.RecordStreamChunk(ctx, `{"type":"message_start","message":{"id":"msg_2","type":"message","role":"assistant","model":"claude-test","content":[]}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"let me think"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_stop","index":0}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"city\":"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"SF\"}"}}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"content_block_stop","index":1}`)
+	runtime.RecordStreamChunk(ctx, `{"type":"message_delta","delta":{"stop_reason":"tool_use"}}`)
+	runtime.FinishLLM(ctx, span, nil, info)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	require.JSONEq(t,
+		`[{"role":"assistant","content":"","reasoning_content":"let me think\n","tool_calls":[{"id":"toolu_1","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"SF\"}"}}]}]`,
+		attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString(),
+	)
+}
+
+// responsesAssistantOutputJSON is the marshaled form of the assistant message
+// the shared relayconvert accumulator rebuilds. dto.ResponsesOutput has no
+// omitempty on its scalar fields, so the rebuilt item carries empty id/status/
+// quality/size keys that the upstream terminal frame would not have had.
+func responsesAssistantOutputJSON(text string) string {
+	return fmt.Sprintf(`[{"type":"message","id":"","status":"","role":"assistant","quality":"","size":"","content":[{"type":"output_text","text":%q,"annotations":null}]}]`, text)
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := rootcommon.Marshal(value)
+	require.NoError(t, err)
+	return string(data)
 }
 
 func TestNestedAttemptUsageAndTTFTStayOnGenerationSpan(t *testing.T) {
