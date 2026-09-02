@@ -63,6 +63,7 @@ function makeLog(other: LogOtherData): UsageLog {
     other: JSON.stringify(other),
     request_id: 'req-1',
     upstream_request_id: '',
+    iself_email: '',
   }
 }
 

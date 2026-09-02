@@ -233,7 +233,8 @@ func TestGetPreferredChannelByAffinity_RequestHeaderKeySource(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "request_header", meta.KeySourceType)
 	require.Equal(t, "X-Affinity-Key", meta.KeySourceKey)
-	require.Equal(t, buildChannelAffinityKeyHint(affinityValue), meta.KeyHint)
+	// KeyHint 保留完整原始值，不再脱敏,request_header 来源即外部平台终端用户邮箱
+	require.Equal(t, affinityValue, meta.KeyHint)
 }
 
 func TestClearCurrentChannelAffinityCache(t *testing.T) {
