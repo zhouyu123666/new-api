@@ -69,11 +69,12 @@ func GetAllLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
+	iselfEmail := c.Query("iself_email")
 	streamError, retry, ok := parseLogSpecialFilters(c, true)
 	if !ok || !validateLogSpecialFilterTimeRange(c, streamError, retry, startTimestamp, endTimestamp) {
 		return
 	}
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, streamError, retry)
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId, upstreamRequestId, streamError, retry, iselfEmail)
 	if err != nil {
 		common.ApiError(c, err)
 		return

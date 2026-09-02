@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -602,7 +603,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			KeySourceType:  strings.TrimSpace(usedSource.Type),
 			KeySourceKey:   strings.TrimSpace(usedSource.Key),
 			KeySourcePath:  strings.TrimSpace(usedSource.Path),
-			KeyHint:        buildChannelAffinityKeyHint(affinityValue),
+			KeyHint:        affinityValue,
 			KeyFingerprint: affinityFingerprint(affinityValue),
 			UsingGroup:     usingGroup,
 			ModelName:      modelName,
@@ -697,6 +698,11 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		"key_fp":         meta.KeyFingerprint,
 	}
 	c.Set(ginKeyChannelAffinityLogInfo, info)
+
+	// if request from iself, context add iself user real email
+	if strings.TrimSpace(meta.KeySourceType) == "request_header" {
+		common.SetContextKey(c, constant.ContextKeyIselfEmail, meta.KeyHint)
+	}
 }
 
 func AppendChannelAffinityAdminInfo(c *gin.Context, adminInfo map[string]interface{}) {

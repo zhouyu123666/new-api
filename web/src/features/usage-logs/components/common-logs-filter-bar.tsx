@@ -96,6 +96,7 @@ function buildSearchSourceKey(values: {
   username?: unknown
   requestId?: unknown
   upstreamRequestId?: unknown
+  iselfEmail?: unknown
   type?: unknown
   isAdminView?: unknown
 }) {
@@ -109,6 +110,7 @@ function buildSearchSourceKey(values: {
     values.username,
     values.requestId,
     values.upstreamRequestId,
+    values.iselfEmail,
     Array.isArray(values.type) ? values.type.join(',') : values.type,
     values.isAdminView,
   ]
@@ -143,6 +145,7 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username,
       requestId: searchParams.requestId,
       upstreamRequestId: searchParams.upstreamRequestId,
+      iselfEmail: searchParams.iselfEmail,
       type: searchParams.type,
       isAdminView: isAdmin,
     }
@@ -158,6 +161,7 @@ export function CommonLogsFilterBar<TData>(
       username: searchParams.username || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
+      iselfEmail: searchParams.iselfEmail || undefined,
     }
     return {
       sourceKey: buildSearchSourceKey(sourceValues),
@@ -174,6 +178,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
+    searchParams.iselfEmail,
     searchParams.type,
     isAdmin,
   ])
@@ -251,7 +256,8 @@ export function CommonLogsFilterBar<TData>(
     !!filters.username ||
     !!filters.channel ||
     !!filters.requestId ||
-    !!filters.upstreamRequestId
+    !!filters.upstreamRequestId ||
+    !!filters.iselfEmail
 
   const hasTypeFilter = logType !== LOG_TYPE_ALL_VALUE
   const hasAdditionalFilters =
@@ -391,6 +397,17 @@ export function CommonLogsFilterBar<TData>(
             className={sensitiveInputClass}
             value={filters.username || ''}
             onChange={(e) => handleChange('username', e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+        </LogsFilterField>
+      )}
+      {isAdmin && (
+        <LogsFilterField>
+          <LogsFilterInput
+            placeholder={t('iSelfEmail')}
+            className={sensitiveInputClass}
+            value={filters.iselfEmail || ''}
+            onChange={(e) => handleChange('iselfEmail', e.target.value)}
             onKeyDown={handleKeyDown}
           />
         </LogsFilterField>
