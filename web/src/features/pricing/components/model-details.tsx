@@ -742,7 +742,9 @@ function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const showRechargePrice = props.showRechargePrice ?? false
   const modelIconKey = model.icon || model.vendor_icon
-  const modelIcon = modelIconKey ? getModelSquareIcon(modelIconKey, 24) : null
+  const modelIcon = modelIconKey
+    ? getModelSquareIcon(modelIconKey, 24, model.model_name)
+    : null
   const routingValue = JSON.stringify(
     {
       model: model.model_name,

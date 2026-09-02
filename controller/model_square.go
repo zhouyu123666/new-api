@@ -199,6 +199,40 @@ func modelSquareItemFromModel(
 	return item
 }
 
+// buildDefaultProviderPrices keeps the model square useful immediately after
+// a model is added. Explicit provider prices remain authoritative; missing
+// provider entries fall back to the model-level token pricing.
+func buildDefaultProviderPrices(
+	pricing model.Pricing,
+	providerPrices map[string]model.ModelProviderPrice,
+) map[string]model.ModelProviderPrice {
+	if len(pricing.Providers) == 0 {
+		return providerPrices
+	}
+	prices := make(map[string]model.ModelProviderPrice, len(pricing.Providers))
+	for slug, price := range providerPrices {
+		prices[slug] = price
+	}
+	inputPrice := pricing.ModelRatio * 2
+	outputPrice := inputPrice * pricing.CompletionRatio
+	if pricing.QuotaType == 1 {
+		inputPrice = pricing.ModelPrice
+		outputPrice = pricing.ModelPrice
+	}
+	for _, provider := range pricing.Providers {
+		if _, exists := prices[provider.Slug]; exists {
+			continue
+		}
+		prices[provider.Slug] = model.ModelProviderPrice{
+			ModelId:      0,
+			ProviderSlug: provider.Slug,
+			InputPrice:   inputPrice,
+			OutputPrice:  outputPrice,
+		}
+	}
+	return prices
+}
+
 func buildModelSquareItems(metas []model.Model) ([]modelSquareItem, error) {
 	pricingByName := make(map[string]model.Pricing)
 	for _, pricing := range model.GetPricing() {
@@ -223,11 +257,15 @@ func buildModelSquareItems(metas []model.Model) ([]modelSquareItem, error) {
 	providerMetadata := model.GetProviderMetadataMap()
 	items := make([]modelSquareItem, 0, len(metas))
 	for i := range metas {
+		providerPrices := providerPriceMap[metas[i].Id]
+		if pricing, ok := pricingByName[metas[i].ModelName]; ok {
+			providerPrices = buildDefaultProviderPrices(pricing, providerPrices)
+		}
 		items = append(items, modelSquareItemFromModel(
 			&metas[i],
 			pricingByName,
 			vendors,
-			providerPriceMap[metas[i].Id],
+			providerPrices,
 			providerMetadata,
 		))
 	}
@@ -235,11 +273,50 @@ func buildModelSquareItems(metas []model.Model) ([]modelSquareItem, error) {
 }
 
 func getModelSquareItems(offset, limit int) ([]modelSquareItem, int64, error) {
+	pricingByName := make(map[string]model.Pricing)
+	for _, pricing := range model.GetPricing() {
+		pricingByName[pricing.ModelName] = pricing
+	}
 	var modelIDs []int
 	if err := model.DB.Model(&model.ModelProviderPrice{}).
 		Distinct("model_id").
 		Pluck("model_id", &modelIDs).Error; err != nil {
 		return nil, 0, err
+	}
+	seenModelIDs := make(map[int]struct{}, len(modelIDs))
+	for _, id := range modelIDs {
+		seenModelIDs[id] = struct{}{}
+	}
+	var enabledAbilities []model.AbilityWithChannel
+	if err := model.DB.Table("abilities").
+		Select("abilities.*, channels.type as channel_type").
+		Joins("left join channels on abilities.channel_id = channels.id").
+		Where("abilities.enabled = ?", true).
+		Scan(&enabledAbilities).Error; err != nil {
+		return nil, 0, err
+	}
+	modelIDByName := make(map[string]int)
+	if len(enabledAbilities) > 0 {
+		var metas []model.Model
+		if err := model.DB.Where("status = ? AND name_rule = ?", 1, model.NameRuleExact).
+			Find(&metas).Error; err != nil {
+			return nil, 0, err
+		}
+		for _, meta := range metas {
+			modelIDByName[meta.ModelName] = meta.Id
+		}
+	}
+	for _, ability := range enabledAbilities {
+		if _, hasPricing := pricingByName[ability.Model]; !hasPricing {
+			continue
+		}
+		if id, ok := modelIDByName[ability.Model]; ok {
+			if _, exists := seenModelIDs[id]; exists {
+				continue
+			}
+			modelIDs = append(modelIDs, id)
+			seenModelIDs[id] = struct{}{}
+		}
 	}
 	if len(modelIDs) == 0 {
 		return []modelSquareItem{}, 0, nil
@@ -270,20 +347,11 @@ func getModelSquareItemByID(id int) (*modelSquareItem, error) {
 	if err := model.DB.Where("id = ? AND status = ? AND name_rule = ?", id, 1, model.NameRuleExact).First(&meta).Error; err != nil {
 		return nil, err
 	}
-	var providerConfigCount int64
-	if err := model.DB.Model(&model.ModelProviderPrice{}).
-		Where("model_id = ?", id).
-		Count(&providerConfigCount).Error; err != nil {
-		return nil, err
-	}
-	if providerConfigCount == 0 {
-		return nil, errors.New("model not found")
-	}
 	items, err := buildModelSquareItems([]model.Model{meta})
 	if err != nil {
 		return nil, err
 	}
-	if len(items) == 0 {
+	if len(items) == 0 || len(items[0].Providers) == 0 {
 		return nil, errors.New("model not found")
 	}
 	items[0].EndpointMap = getModelSquareEndpointMap(items[0].SupportedEndpointTypes)
