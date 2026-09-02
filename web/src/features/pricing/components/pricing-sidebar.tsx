@@ -27,7 +27,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import { getLobeIcon } from '@/lib/lobe-icon'
+import { getModelSquareIcon } from '@/lib/lobe-icon'
 import { cn } from '@/lib/utils'
 
 import {
@@ -37,13 +37,13 @@ import {
   getEndpointTypeLabels,
   getQuotaTypeLabels,
 } from '../constants'
+import { hasTaskUsageSchema } from '../lib/dynamic-price'
 import {
   ADVANCED_RANGE_OPTIONS,
   PARAMETER_RANGE_OPTIONS,
   parseTags,
   type PricingAdvancedFilters,
 } from '../lib/filters'
-import { hasTaskUsageSchema } from '../lib/dynamic-price'
 import type { PricingModel, PricingVendor } from '../types'
 
 type FilterOption = {
@@ -205,7 +205,7 @@ export function PricingSidebar(props: PricingSidebarProps) {
           props.models,
           (model) => model.vendor_name === vendor.name
         ),
-        icon: vendor.icon ? getLobeIcon(vendor.icon, 14) : undefined,
+        icon: vendor.icon ? getModelSquareIcon(vendor.icon, 14) : undefined,
       }))
       .filter((vendor) => vendor.count > 0),
   ]
@@ -371,10 +371,12 @@ export function PricingSidebar(props: PricingSidebarProps) {
           {
             title: t('Quantization'),
             value: props.advancedFilters.quantization,
-            options: props.advancedOptions.quantizations.map((quantization) => ({
-              value: quantization,
-              label: quantization,
-            })),
+            options: props.advancedOptions.quantizations.map(
+              (quantization) => ({
+                value: quantization,
+                label: quantization,
+              })
+            ),
             onChange: (value: string) =>
               props.onAdvancedFilterChange('quantization', value),
           },

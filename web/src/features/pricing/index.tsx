@@ -59,7 +59,7 @@ export function PricingContent({
   const [selectedModelName, setSelectedModelName] = useState<string | null>(
     null
   )
-  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(modelSquare)
 
   const {
     models,
@@ -276,7 +276,6 @@ export function PricingContent({
           />
 
           {renderPricingContent()}
-
         </main>
       </div>
 

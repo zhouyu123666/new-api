@@ -29,9 +29,20 @@ import * as LobeIcons from '@lobehub/icons'
 import type React from 'react'
 
 import { IconSub2api } from '@/assets/custom/icon-sub2api'
+import { getModelSquareIconName } from '@/lib/model-square-icon'
+
+export { getModelSquareIconName }
 
 const CUSTOM_ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
   Sub2API: IconSub2api,
+}
+
+export function getModelSquareIcon(
+  iconName: string | undefined | null,
+  size: number = 20,
+  modelName?: string
+): React.ReactNode {
+  return getLobeIcon(getModelSquareIconName(iconName, modelName), size)
 }
 
 /**

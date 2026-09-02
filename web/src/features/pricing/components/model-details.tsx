@@ -45,7 +45,13 @@ import { sideDrawerContentClassName } from '@/components/drawer-layout'
 import { GroupBadge } from '@/components/group-badge'
 import { PublicLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
-import { Switch } from '@/components/ui/switch'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Sheet,
   SheetContent,
@@ -54,13 +60,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { getPerfMetrics } from '@/features/performance-metrics/api'
 import {
@@ -69,15 +69,12 @@ import {
   formatUptimePct,
   getSuccessRateTextClass,
 } from '@/features/performance-metrics/lib/format'
-import { getLobeIcon } from '@/lib/lobe-icon'
-import { cn } from '@/lib/utils'
-import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { useStatus } from '@/hooks/use-status'
+import { formatBillingCurrencyFromUSD } from '@/lib/currency'
+import { getModelSquareIcon } from '@/lib/lobe-icon'
+import { cn } from '@/lib/utils'
 
-import {
-  getModelSquareDetail,
-  getModelSquareProviderDetail,
-} from '../api'
+import { getModelSquareDetail, getModelSquareProviderDetail } from '../api'
 import { DEFAULT_TOKEN_UNIT } from '../constants'
 import { usePricingData } from '../hooks/use-pricing-data'
 import {
@@ -93,6 +90,12 @@ import {
 } from '../lib/dynamic-price'
 import { isFreeProvider, parseTags } from '../lib/filters'
 import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
+import {
+  formatFixedPrice,
+  formatGroupPrice,
+  formatPrice,
+  sortProvidersForStandard,
+} from '../lib/price'
 import { modelSquareQueryKeys } from '../lib/query-keys'
 import {
   evaluateTaskUsageExamples,
@@ -100,12 +103,6 @@ import {
   getTaskNumberFields,
 } from '../lib/task-expr'
 import { getTaskMatrixDisplayTiers } from '../lib/task-matrix-display'
-import {
-  formatFixedPrice,
-  formatGroupPrice,
-  formatPrice,
-  sortProvidersForStandard,
-} from '../lib/price'
 import type {
   ModelCapability,
   PriceType,
@@ -674,7 +671,7 @@ function ModelProvidersSection(props: {
             <div className='flex min-w-0 items-center gap-2'>
               <div className='bg-muted flex size-7 shrink-0 items-center justify-center rounded-md'>
                 {provider.icon ? (
-                  getLobeIcon(provider.icon, 18)
+                  getModelSquareIcon(provider.icon, 18)
                 ) : (
                   <span className='text-muted-foreground text-xs font-semibold'>
                     {provider.name.charAt(0).toUpperCase()}
@@ -745,7 +742,7 @@ function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
   const tokenUnit = props.tokenUnit ?? DEFAULT_TOKEN_UNIT
   const showRechargePrice = props.showRechargePrice ?? false
   const modelIconKey = model.icon || model.vendor_icon
-  const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 24) : null
+  const modelIcon = modelIconKey ? getModelSquareIcon(modelIconKey, 24) : null
   const routingValue = JSON.stringify(
     {
       model: model.model_name,
@@ -777,12 +774,12 @@ function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
               )}
             </div>
             <div className='min-w-0'>
-              <SheetTitle className='whitespace-normal font-mono break-all'>
+              <SheetTitle className='font-mono break-all whitespace-normal'>
                 {model.model_name}
               </SheetTitle>
               <SheetDescription className='mt-1 flex flex-wrap items-center gap-1.5 text-xs'>
                 <span className='inline-flex items-center gap-1'>
-                  {provider.icon ? getLobeIcon(provider.icon, 14) : null}
+                  {provider.icon ? getModelSquareIcon(provider.icon, 14) : null}
                   {provider.name}
                 </span>
                 <span className='text-muted-foreground/40'>·</span>
@@ -844,14 +841,18 @@ function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
                     {providerPricing.cache_read_price != null && (
                       <CatalogInfoCell label={`${t('Cache')} / 1M`}>
                         <CatalogTextValue>
-                          {formatProviderPrice(providerPricing.cache_read_price)}
+                          {formatProviderPrice(
+                            providerPricing.cache_read_price
+                          )}
                         </CatalogTextValue>
                       </CatalogInfoCell>
                     )}
                     {providerPricing.cache_write_price != null && (
                       <CatalogInfoCell label={`${t('Cache Write')} / 1M`}>
                         <CatalogTextValue>
-                          {formatProviderPrice(providerPricing.cache_write_price)}
+                          {formatProviderPrice(
+                            providerPricing.cache_write_price
+                          )}
                         </CatalogTextValue>
                       </CatalogInfoCell>
                     )}
@@ -955,10 +956,7 @@ function ModelProviderDetailsDrawer(props: ModelProviderDetailsDrawerProps) {
               </section>
             </TabsContent>
 
-            <TabsContent
-              value='performance'
-              className='space-y-6 outline-none'
-            >
+            <TabsContent value='performance' className='space-y-6 outline-none'>
               <ProviderPerformanceTab provider={provider} />
             </TabsContent>
           </Tabs>
@@ -1006,9 +1004,10 @@ function ProviderPerformanceTab(props: { provider: PricingProvider }) {
       <section className='bg-card rounded-xl border p-4'>
         <div className='flex items-center justify-between gap-3'>
           <div>
-          <h3 className='text-sm font-semibold'>{t('Performance trend')}</h3>
+            <h3 className='text-sm font-semibold'>{t('Performance trend')}</h3>
             <p className='text-muted-foreground mt-1 text-xs'>
-              {props.provider.name} · {t('Provider-specific metrics are not available yet')}
+              {props.provider.name} ·{' '}
+              {t('Provider-specific metrics are not available yet')}
             </p>
           </div>
           <HeartPulse className='text-muted-foreground size-4' />
@@ -1182,8 +1181,7 @@ function ModelSquareProviderTable(props: {
                 key={provider.slug}
                 className={cn(
                   'hover:bg-muted/30 cursor-pointer transition-colors',
-                  provider.slug === props.primaryProviderSlug &&
-                    'bg-primary/5'
+                  provider.slug === props.primaryProviderSlug && 'bg-primary/5'
                 )}
                 onClick={() => props.onProviderClick(provider)}
               >
@@ -1191,7 +1189,7 @@ function ModelSquareProviderTable(props: {
                   <div className='flex items-center gap-2'>
                     <div className='bg-muted flex size-7 shrink-0 items-center justify-center rounded-md'>
                       {provider.icon ? (
-                        getLobeIcon(provider.icon, 18)
+                        getModelSquareIcon(provider.icon, 18)
                       ) : (
                         <span className='text-muted-foreground text-xs font-semibold'>
                           {provider.name.charAt(0).toUpperCase()}
@@ -1225,7 +1223,9 @@ function ModelSquareProviderTable(props: {
                 </td>
                 <td className='px-4 py-3 text-right font-mono tabular-nums'>
                   {provider.pricing
-                    ? formatBillingCurrencyFromUSD(provider.pricing.output_price)
+                    ? formatBillingCurrencyFromUSD(
+                        provider.pricing.output_price
+                      )
                     : t('To be added')}
                 </td>
                 <td className='text-muted-foreground px-4 py-3 text-right font-mono tabular-nums'>
@@ -1267,7 +1267,9 @@ function ModelSquareProviderTable(props: {
                         aria-label={t('Move {{group}} down', {
                           group: provider.name,
                         })}
-                        disabled={providers.indexOf(provider) === providers.length - 1}
+                        disabled={
+                          providers.indexOf(provider) === providers.length - 1
+                        }
                         onClick={(event) => {
                           event.stopPropagation()
                           props.onMoveProvider?.(provider.slug, 1)
@@ -1327,7 +1329,9 @@ function getRoutingModeDescription(
 ): string {
   if (mode === 'free') return t('Only providers with zero configured price')
   if (mode === 'nitro') {
-    return t('Provider performance data is not available yet; using provider order')
+    return t(
+      'Provider performance data is not available yet; using provider order'
+    )
   }
   if (mode === 'exact') {
     return t('Quality data is not available yet; using provider order')
@@ -1355,7 +1359,9 @@ function ProviderRoutingControls(props: {
   return (
     <div className='bg-muted/20 flex flex-col gap-3 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between'>
       <div className='flex flex-wrap items-center gap-2'>
-        <span className='text-muted-foreground text-xs'>{t('Routing mode')}</span>
+        <span className='text-muted-foreground text-xs'>
+          {t('Routing mode')}
+        </span>
         <Select
           value={props.mode}
           onValueChange={(value) =>
@@ -1417,7 +1423,9 @@ export function ModelSquareDetailPage(props: ModelDetailsContentProps) {
   )
   useEffect(() => {
     setProviderOrder((current) => {
-      const available = new Set(sortedProviders.map((provider) => provider.slug))
+      const available = new Set(
+        sortedProviders.map((provider) => provider.slug)
+      )
       const retained = current.filter((slug) => available.has(slug))
       const appended = sortedProviders
         .map((provider) => provider.slug)
@@ -1445,18 +1453,21 @@ export function ModelSquareDetailPage(props: ModelDetailsContentProps) {
       ...sortedProviders.filter((provider) => !orderedSlugs.has(provider.slug)),
     ]
   }, [providerOrder, sortedProviders])
-  const moveProvider = useCallback((providerSlug: string, direction: -1 | 1) => {
-    setProviderOrder((current) => {
-      const index = current.indexOf(providerSlug)
-      const target = index + direction
-      if (index < 0 || target < 0 || target >= current.length) return current
-      const next = [...current]
-      const moved = next[index]
-      next[index] = next[target]
-      next[target] = moved
-      return next
-    })
-  }, [])
+  const moveProvider = useCallback(
+    (providerSlug: string, direction: -1 | 1) => {
+      setProviderOrder((current) => {
+        const index = current.indexOf(providerSlug)
+        const target = index + direction
+        if (index < 0 || target < 0 || target >= current.length) return current
+        const next = [...current]
+        const moved = next[index]
+        next[index] = next[target]
+        next[target] = moved
+        return next
+      })
+    },
+    []
+  )
   const primaryProvider = routedProviders[0]
   const routingValue = useMemo(
     () =>
@@ -1485,10 +1496,8 @@ export function ModelSquareDetailPage(props: ModelDetailsContentProps) {
   } else if (routedProviders.length === 0) {
     priceSource = t('No matching providers')
   }
-  const displayInputPrice =
-    routedProviders.length === 0 ? '—' : inputPrice
-  const displayOutputPrice =
-    routedProviders.length === 0 ? '—' : outputPrice
+  const displayInputPrice = routedProviders.length === 0 ? '—' : inputPrice
+  const displayOutputPrice = routedProviders.length === 0 ? '—' : outputPrice
   const context = model.context_length
     ? formatCatalogTokenCount(model.context_length)
     : '—'
@@ -1504,7 +1513,9 @@ export function ModelSquareDetailPage(props: ModelDetailsContentProps) {
         <div className='flex flex-wrap items-start justify-between gap-4'>
           <div className='flex min-w-0 items-start gap-3'>
             <div className='bg-muted flex size-11 shrink-0 items-center justify-center rounded-xl'>
-              {(modelIcon ? getLobeIcon(modelIcon, 28) : null) || (
+              {(modelIcon
+                ? getModelSquareIcon(modelIcon, 28, model.model_name)
+                : null) || (
                 <span className='font-mono text-lg font-bold'>
                   {model.model_name.charAt(0).toUpperCase()}
                 </span>
@@ -1514,7 +1525,7 @@ export function ModelSquareDetailPage(props: ModelDetailsContentProps) {
               <div className='text-muted-foreground mb-1 text-sm'>
                 {model.vendor_name || t('Model')}
               </div>
-              <h1 className='whitespace-normal text-2xl font-bold tracking-tight break-all sm:text-3xl'>
+              <h1 className='text-2xl font-bold tracking-tight break-all whitespace-normal sm:text-3xl'>
                 {model.model_name}
               </h1>
               <div className='mt-2 flex flex-wrap items-center gap-2'>
@@ -1565,15 +1576,15 @@ export function ModelSquareDetailPage(props: ModelDetailsContentProps) {
             }
             icon={Layers}
           />
-              <ModelSquareMetric
-                label={t('Input')}
-                value={`${displayInputPrice} / 1M`}
-                icon={Zap}
-                hint={priceSource}
+          <ModelSquareMetric
+            label={t('Input')}
+            value={`${displayInputPrice} / 1M`}
+            icon={Zap}
+            hint={priceSource}
           />
-              <ModelSquareMetric
-                label={t('Output')}
-                value={`${displayOutputPrice} / 1M`}
+          <ModelSquareMetric
+            label={t('Output')}
+            value={`${displayOutputPrice} / 1M`}
             icon={Zap}
             hint={priceSource}
           />
@@ -1693,7 +1704,9 @@ function ModelHeader(props: { model: PricingModel }) {
   const { t } = useTranslation()
   const model = props.model
   const modelIconKey = model.icon || model.vendor_icon
-  const modelIcon = modelIconKey ? getLobeIcon(modelIconKey, 20) : null
+  const modelIcon = modelIconKey
+    ? getModelSquareIcon(modelIconKey, 20, model.model_name)
+    : null
   const description = model.description || model.vendor_description || null
 
   return (
