@@ -61,7 +61,7 @@ func TestGetAllLogsStreamErrorFilter(t *testing.T) {
 	}).Error)
 
 	logs, total, err := GetAllLogs(
-		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", true, false,
+		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", true, false, "",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
@@ -88,7 +88,7 @@ func TestGetAllLogsRetryFilter(t *testing.T) {
 	}).Error)
 
 	logs, total, err := GetAllLogs(
-		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", false, true,
+		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", false, true, "",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), total)
@@ -108,14 +108,14 @@ func TestSpecialLogFiltersFailClosedForUnsupportedDatabase(t *testing.T) {
 	require.NoError(t, db.Create(&Log{Type: LogTypeConsume, Other: other}).Error)
 
 	streamLogs, streamTotal, err := GetAllLogs(
-		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", true, false,
+		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", true, false, "",
 	)
 	require.NoError(t, err)
 	assert.Zero(t, streamTotal)
 	assert.Empty(t, streamLogs)
 
 	retryLogs, retryTotal, err := GetAllLogs(
-		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", false, true,
+		LogTypeUnknown, 0, 0, "", "", "", 0, 20, 0, "", "", "", false, true, "",
 	)
 	require.NoError(t, err)
 	assert.Zero(t, retryTotal)

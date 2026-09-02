@@ -520,46 +520,86 @@ export function useCommonLogsColumns(
 
           if (!log.username) return null
 
+          const other = parseLogOther(log.other)
+          const adminInfo = other?.admin_info
+          const affinity = adminInfo?.channel_affinity
+
+          // 外部平台终端用户标识：仅当亲和 key 来自请求头
+          // key_source === 'request_header'
+          const isExternalPlatform = affinity?.key_source === 'request_header'
+          // 新日志优先显示独立列 iself_email，历史数据无该列时用脱敏的 hint
+          const externalUser = isExternalPlatform
+            ? log.iself_email ||
+              affinity?.key_hint ||
+              affinity?.key_fp ||
+              ''
+            : ''
+
+          const externalUserTooltip = affinity?.key_fp
+            ? `${externalUser}\n${t('Key Fingerprint')}: ${affinity.key_fp}`
+            : externalUser
+
           return (
-            <button
-              type='button'
-              className='flex items-center gap-1.5 text-left'
-              onClick={(e) => {
-                e.stopPropagation()
-                setSelectedUserId(log.user_id)
-                setUserInfoDialogOpen(true)
-              }}
-            >
-              <Avatar className='ring-border/60 size-6 ring-1 max-sm:hidden'>
-                <AvatarFallback
-                  className={cn(
-                    'text-[11px] font-semibold',
-                    !sensitiveVisible && 'bg-muted text-muted-foreground'
-                  )}
-                  style={
-                    sensitiveVisible
-                      ? getUserAvatarStyle(log.username)
-                      : undefined
-                  }
-                >
-                  {sensitiveVisible ? getUserAvatarFallback(log.username) : '•'}
-                </AvatarFallback>
-              </Avatar>
-              <TooltipProvider delay={300}>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className='text-muted-foreground max-w-[100px] truncate text-sm hover:underline' />
+            <div className='flex min-w-0 items-center gap-1.5'>
+              <button
+                type='button'
+                className='shrink-0'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setSelectedUserId(log.user_id)
+                  setUserInfoDialogOpen(true)
+                }}
+              >
+                <Avatar className='ring-border/60 size-6 ring-1 max-sm:hidden'>
+                  <AvatarFallback
+                    className={cn(
+                      'text-[11px] font-semibold',
+                      !sensitiveVisible && 'bg-muted text-muted-foreground'
+                    )}
+                    style={
+                      sensitiveVisible
+                        ? getUserAvatarStyle(log.username)
+                        : undefined
                     }
                   >
-                    {sensitiveVisible ? log.username : '••••'}
-                  </TooltipTrigger>
-                  {sensitiveVisible && log.username.length > 12 && (
-                    <TooltipContent side='top'>{log.username}</TooltipContent>
-                  )}
-                </Tooltip>
-              </TooltipProvider>
-            </button>
+                    {sensitiveVisible
+                      ? getUserAvatarFallback(log.username)
+                      : '•'}
+                  </AvatarFallback>
+                </Avatar>
+              </button>
+
+              <div className='flex max-w-[160px] min-w-0 flex-col gap-0.5'>
+                <span className='text-muted-foreground block truncate text-sm'>
+                  {sensitiveVisible ? log.username : '••••••'}
+                </span>
+
+                {externalUser && (
+                  <TooltipProvider delay={300}>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <span className='block max-w-full truncate font-mono text-xs text-amber-600 dark:text-amber-400' />
+                        }
+                      >
+                        {sensitiveVisible ? externalUser : '••••••'}
+                      </TooltipTrigger>
+
+                      {sensitiveVisible && (
+                        <TooltipContent side='top' className='max-w-xs'>
+                          <div className='space-y-1'>
+                            <p className='font-medium'>{t('External User')}</p>
+                            <p className='font-mono break-all whitespace-pre-line'>
+                              {externalUserTooltip}
+                            </p>
+                          </div>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
+            </div>
           )
         },
       }

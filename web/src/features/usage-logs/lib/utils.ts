@@ -217,6 +217,9 @@ export function buildApiParams(config: {
     ...(searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
       : {}),
+    ...(isAdmin && searchParams.iselfEmail
+      ? { iself_email: String(searchParams.iselfEmail) }
+      : {}),
     ...buildTimeRangeParams(searchParams, false),
   }
 
