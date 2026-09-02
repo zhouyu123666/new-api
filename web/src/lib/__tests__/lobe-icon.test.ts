@@ -21,6 +21,7 @@ import { getModelSquareIconName } from '../model-square-icon'
 describe('model square icon names', () => {
   test('upgrades legacy monochrome provider icons to color variants', () => {
     expect(getModelSquareIconName('Claude')).toBe('Claude.Color')
+    expect(getModelSquareIconName('Anthropic')).toBe('Claude.Color')
     expect(getModelSquareIconName('DeepSeek')).toBe('DeepSeek.Color')
   })
 

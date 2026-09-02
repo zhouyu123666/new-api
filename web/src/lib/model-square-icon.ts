@@ -15,6 +15,10 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
+const COLOR_ICON_ALIASES: Record<string, string> = {
+  Anthropic: 'Claude',
+}
+
 const COLOR_ICON_BASES = new Set([
   'Ai360',
   'Anthropic',
@@ -49,6 +53,7 @@ export function getModelSquareIconName(
   const trimmedName = iconName.trim()
   const segments = trimmedName.split('.')
   const baseKey = segments[0]
+  const colorBaseKey = COLOR_ICON_ALIASES[baseKey] ?? baseKey
 
   if (segments.length > 1 || baseKey === 'Sub2API') return trimmedName
 
@@ -59,5 +64,7 @@ export function getModelSquareIconName(
     return 'OpenAI.Avatar.type={gpt5}'
   }
 
-  return COLOR_ICON_BASES.has(baseKey) ? `${baseKey}.Color` : trimmedName
+  return COLOR_ICON_BASES.has(colorBaseKey)
+    ? `${colorBaseKey}.Color`
+    : trimmedName
 }

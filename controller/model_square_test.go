@@ -65,9 +65,9 @@ func TestGetModelSquareSupportsPagination(t *testing.T) {
 	var response struct {
 		Data struct {
 			Items  []modelSquareItem `json:"items"`
-			Total  int64              `json:"total"`
-			Offset int                `json:"offset"`
-			Limit  int                `json:"limit"`
+			Total  int64             `json:"total"`
+			Offset int               `json:"offset"`
+			Limit  int               `json:"limit"`
 		} `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -103,9 +103,9 @@ func TestGetModelSquareUsesDefaultPageSize(t *testing.T) {
 	var response struct {
 		Data struct {
 			Items  []modelSquareItem `json:"items"`
-			Total  int64         `json:"total"`
-			Offset int           `json:"offset"`
-			Limit  int           `json:"limit"`
+			Total  int64             `json:"total"`
+			Offset int               `json:"offset"`
+			Limit  int               `json:"limit"`
 		} `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -135,7 +135,7 @@ func TestGetModelSquareExcludesModelsWithoutProviderConfiguration(t *testing.T) 
 	var response struct {
 		Data struct {
 			Items []modelSquareItem `json:"items"`
-			Total int64              `json:"total"`
+			Total int64             `json:"total"`
 		} `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -258,4 +258,41 @@ func TestModelSquareProviderNameFallsBackWhenMetadataNameIsEmpty(t *testing.T) {
 
 	require.Len(t, item.Providers, 1)
 	assert.Equal(t, "Provider label", item.Providers[0].Name)
+}
+
+func TestBuildDefaultProviderPricesUsesModelPricingForMissingProviders(t *testing.T) {
+	prices := buildDefaultProviderPrices(
+		model.Pricing{
+			ModelName:       "default-price-model",
+			ModelRatio:      1.5,
+			CompletionRatio: 2,
+			Providers:       []model.ProviderSummary{{Slug: "openai"}},
+		},
+		map[string]model.ModelProviderPrice{},
+	)
+
+	require.Contains(t, prices, "openai")
+	assert.Equal(t, 3.0, prices["openai"].InputPrice)
+	assert.Equal(t, 6.0, prices["openai"].OutputPrice)
+}
+
+func TestBuildDefaultProviderPricesPreservesExplicitProviderPricing(t *testing.T) {
+	prices := buildDefaultProviderPrices(
+		model.Pricing{
+			ModelName:       "configured-price-model",
+			ModelRatio:      1.5,
+			CompletionRatio: 2,
+			Providers:       []model.ProviderSummary{{Slug: "openai"}},
+		},
+		map[string]model.ModelProviderPrice{
+			"openai": {
+				ProviderSlug: "openai",
+				InputPrice:   9,
+				OutputPrice:  10,
+			},
+		},
+	)
+
+	assert.Equal(t, 9.0, prices["openai"].InputPrice)
+	assert.Equal(t, 10.0, prices["openai"].OutputPrice)
 }
