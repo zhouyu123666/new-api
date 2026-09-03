@@ -3,9 +3,11 @@ package observability
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -125,6 +127,103 @@ func TestStartLLMRequestCapturesInputAndUsage(t *testing.T) {
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.usage_details").AsString())
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "new_api.billing.gateway_cost_usd").AsString())
 	require.JSONEq(t, `{"total":0.000084}`, attributeValue(spans[0].Attributes, "langfuse.observation.cost_details").AsString())
+}
+
+func TestStartLLMRequestPropagatesSessionID(t *testing.T) {
+	tests := []struct {
+		name     string
+		request  dto.Request
+		expected string
+	}{
+		{
+			name: "codex",
+			request: &dto.OpenAIResponsesRequest{
+				Model:          "gpt-test",
+				ClientMetadata: json.RawMessage(`{"session_id":"codex-session-123"}`),
+			},
+			expected: "codex-session-123",
+		},
+		{
+			name: "claude code",
+			request: &dto.ClaudeRequest{
+				Model:    "claude-test",
+				Metadata: json.RawMessage(`{"user_id":{"device_id":"device-123","account_uuid":"account-123","session_id":"claude-code-session-123"}}`),
+			},
+			expected: "claude-code-session-123",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
+			runtime := &Runtime{
+				enabled:         true,
+				captureMaxBytes: 1024,
+				tracerProvider:  provider,
+				tracer:          provider.Tracer("test"),
+				propagator:      propagationTraceContextForTest(),
+			}
+			t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+			parentCtx, parentSpan := runtime.tracer.Start(context.Background(), "http")
+			llmCtx, llmSpan := runtime.StartLLMRequest(parentCtx, &common.RelayInfo{
+				RequestId:       "req-session",
+				OriginModelName: "test-model",
+				RelayFormat:     "openai",
+			}, tt.request)
+			attemptCtx, attemptSpan := runtime.StartAttempt(llmCtx, nil, 7, 8, "test-channel")
+			providerCtx, providerSpan := runtime.StartProviderRequest(attemptCtx, nil, nil)
+			_, streamSpan := runtime.StartStream(providerCtx, nil)
+
+			runtime.FinishSpan(streamSpan, nil)
+			runtime.FinishSpan(providerSpan, nil)
+			runtime.FinishSpan(attemptSpan, nil)
+			runtime.FinishLLM(llmCtx, llmSpan, nil, nil)
+			parentSpan.End()
+
+			spans := exporter.GetSpans()
+			require.Len(t, spans, 5)
+			for _, span := range spans {
+				require.Equal(t, tt.expected, attributeValue(span.Attributes, "session.id").AsString(), span.Name)
+			}
+		})
+	}
+}
+
+func TestExtractLangfuseSessionIDRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name string
+		req  dto.Request
+	}{
+		{name: "nil request"},
+		{name: "other client", req: &dto.GeneralOpenAIRequest{}},
+		{name: "missing", req: &dto.OpenAIResponsesRequest{ClientMetadata: json.RawMessage(`{}`)}},
+		{name: "malformed", req: &dto.OpenAIResponsesRequest{ClientMetadata: json.RawMessage(`{`)}},
+		{name: "non string", req: &dto.OpenAIResponsesRequest{ClientMetadata: json.RawMessage(`{"session_id":42}`)}},
+		{name: "empty", req: &dto.OpenAIResponsesRequest{ClientMetadata: json.RawMessage(`{"session_id":"   "}`)}},
+		{name: "non ascii", req: &dto.OpenAIResponsesRequest{ClientMetadata: json.RawMessage(`{"session_id":"会话"}`)}},
+		{name: "too long", req: &dto.OpenAIResponsesRequest{ClientMetadata: json.RawMessage(`{"session_id":"` + strings.Repeat("a", maxLangfuseSessionIDLen) + `"}`)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Empty(t, extractLangfuseSessionID(tt.req))
+		})
+	}
+	require.Equal(t, strings.Repeat("a", maxLangfuseSessionIDLen-1), extractLangfuseSessionID(&dto.OpenAIResponsesRequest{
+		ClientMetadata: json.RawMessage(`{"session_id":"` + strings.Repeat("a", maxLangfuseSessionIDLen-1) + `"}`),
+	}))
+}
+
+func TestExtractLangfuseSessionIDSupportsClaudeCode(t *testing.T) {
+	require.Equal(t, "claude-code-session-123", extractLangfuseSessionID(&dto.ClaudeRequest{
+		Metadata: json.RawMessage(`{"user_id":{"device_id":"device-123","account_uuid":"account-123","session_id":"claude-code-session-123"}}`),
+	}))
+	require.Equal(t, "claude-code-string-session-123", extractLangfuseSessionID(&dto.ClaudeRequest{
+		Metadata: json.RawMessage(`{"user_id":"{\"device_id\":\"device-123\",\"account_uuid\":\"account-123\",\"session_id\":\"claude-code-string-session-123\"}"}`),
+	}))
+	require.Empty(t, extractLangfuseSessionID(&dto.ClaudeRequest{
+		Metadata: json.RawMessage(`{"user_id":{"session_id":"会话"}}`),
+	}))
 }
 
 func TestRecordStreamChunkCapturesOneFinalJSONEvent(t *testing.T) {

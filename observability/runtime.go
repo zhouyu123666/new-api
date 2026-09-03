@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ import (
 const (
 	serviceName             = "new-api"
 	defaultCaptureMaxBytes  = 4 << 20
+	maxLangfuseSessionIDLen = 200
 	traceContextKey         = "new_api_otel_trace"
 	llmRequestSpanName      = "newapi.llm.request"
 	relayAttemptSpanName    = "newapi.relay.attempt"
@@ -58,6 +60,7 @@ type Runtime struct {
 type traceState struct {
 	mu          sync.Mutex
 	span        trace.Span
+	sessionID   string
 	input       strings.Builder
 	output      strings.Builder
 	inputTrunc  bool
@@ -198,7 +201,9 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 	if info != nil && info.HasChannelMeta() {
 		apiType = info.ApiType
 	}
-	state := &traceState{maxBytes: r.captureMaxBytes, apiType: apiType}
+	sessionID := extractLangfuseSessionID(request)
+	state := &traceState{maxBytes: r.captureMaxBytes, apiType: apiType, sessionID: sessionID}
+	setSessionID(trace.SpanFromContext(ctx), sessionID)
 	spanAttrs := []attribute.KeyValue{
 		attribute.String("gen_ai.operation.name", "chat"),
 		attribute.String("gen_ai.request.model", info.OriginModelName),
@@ -216,6 +221,7 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 	}
 	ctx, span := r.tracer.Start(ctx, llmRequestSpanName, startOptions...)
 	span.SetAttributes(spanAttrs...)
+	setSessionID(span, sessionID)
 	state.span = span
 	ctx = context.WithValue(ctx, traceContextKey, state)
 	if r.captureContent && request != nil {
@@ -236,6 +242,7 @@ func (r *Runtime) StartAttempt(ctx context.Context, info *relaycommon.RelayInfo,
 		attribute.Int("new_api.channel_type", channelType),
 		attribute.String("new_api.channel_name", channelName),
 	)
+	setSessionID(span, sessionIDFromContext(ctx))
 	// RelayInfo is intentionally not read here. The relay may replace or clear
 	// it while selecting a channel; observability must never be able to panic
 	// the request path. The request/model attributes are recorded on the parent
@@ -255,6 +262,7 @@ func (r *Runtime) StartProviderRequest(ctx context.Context, info *relaycommon.Re
 			attribute.String("http.request.method", req.Method),
 		)
 	}
+	setSessionID(span, sessionIDFromContext(ctx))
 	return ctx, span
 }
 
@@ -263,6 +271,7 @@ func (r *Runtime) StartStream(ctx context.Context, info *relaycommon.RelayInfo) 
 		return ctx, trace.SpanFromContext(ctx)
 	}
 	ctx, span := r.tracer.Start(ctx, streamSpanName, trace.WithSpanKind(trace.SpanKindInternal))
+	setSessionID(span, sessionIDFromContext(ctx))
 	return ctx, span
 }
 
@@ -455,6 +464,80 @@ func stateFromContext(ctx context.Context) *traceState {
 	}
 	state, _ := ctx.Value(traceContextKey).(*traceState)
 	return state
+}
+
+func sessionIDFromContext(ctx context.Context) string {
+	if state := stateFromContext(ctx); state != nil {
+		return state.sessionID
+	}
+	return ""
+}
+
+func setSessionID(span trace.Span, sessionID string) {
+	if span == nil || sessionID == "" {
+		return
+	}
+	span.SetAttributes(attribute.String("session.id", sessionID))
+}
+
+func extractLangfuseSessionID(request dto.Request) string {
+	var sessionID string
+	switch request := request.(type) {
+	case *dto.OpenAIResponsesRequest:
+		// Codex includes its conversation identifier in Responses
+		// client_metadata.session_id.
+		if request == nil || len(request.ClientMetadata) == 0 {
+			return ""
+		}
+		var metadata struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := common.Unmarshal([]byte(request.ClientMetadata), &metadata); err != nil {
+			return ""
+		}
+		sessionID = metadata.SessionID
+	case *dto.ClaudeRequest:
+		// Claude Code nests its session identifier in metadata.user_id.session_id.
+		// Depending on the client version, user_id is either an object or a
+		// JSON-encoded string containing that object.
+		if request == nil || len(request.Metadata) == 0 {
+			return ""
+		}
+		var metadata struct {
+			UserID json.RawMessage `json:"user_id"`
+		}
+		if err := common.Unmarshal([]byte(request.Metadata), &metadata); err != nil {
+			return ""
+		}
+		var userID struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := common.Unmarshal(metadata.UserID, &userID); err == nil {
+			sessionID = userID.SessionID
+			break
+		}
+		var encodedUserID string
+		if err := common.Unmarshal(metadata.UserID, &encodedUserID); err != nil {
+			return ""
+		}
+		if err := common.Unmarshal([]byte(encodedUserID), &userID); err != nil {
+			return ""
+		}
+		sessionID = userID.SessionID
+	default:
+		return ""
+	}
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || len(sessionID) >= maxLangfuseSessionIDLen {
+		return ""
+	}
+	for i := 0; i < len(sessionID); i++ {
+		if sessionID[i] > 0x7f {
+			return ""
+		}
+	}
+	return sessionID
 }
 
 type captureReadCloser struct {
