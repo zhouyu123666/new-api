@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
@@ -224,12 +225,25 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 	setSessionID(span, sessionID)
 	state.span = span
 	ctx = context.WithValue(ctx, traceContextKey, state)
-	if r.captureContent && request != nil {
-		if body, err := common.Marshal(request); err == nil {
-			state.addInput(span, body)
-		}
-	}
 	return ctx, span
+}
+
+// RecordInput stores a filtered copy of the final upstream request body for
+// Langfuse. It must be called after relay conversion and all request policies
+// have been applied, immediately before the upstream request is sent.
+func (r *Runtime) RecordInput(ctx context.Context, body []byte, format types.RelayFormat) {
+	if !r.Enabled() || !r.captureContent || len(body) == 0 {
+		return
+	}
+	state := stateFromContext(ctx)
+	if state == nil {
+		return
+	}
+	filtered, ok := buildLangfuseInput(body, format)
+	if !ok {
+		return
+	}
+	state.setInput(generationSpanFromContext(ctx), filtered)
 }
 
 func (r *Runtime) StartAttempt(ctx context.Context, info *relaycommon.RelayInfo, channelID int, channelType int, channelName string) (context.Context, trace.Span) {
@@ -420,6 +434,7 @@ func (r *Runtime) FinishLLM(ctx context.Context, span trace.Span, err error, inf
 	if state := stateFromContext(ctx); state != nil {
 		state.mu.Lock()
 		state.finalizeStreamOutput(span)
+		state.finalizeCapturedOutput(span)
 		if state.input.Len() > 0 {
 			span.SetAttributes(
 				attribute.String("gen_ai.input.messages", state.input.String()),
@@ -553,22 +568,34 @@ func (r *captureReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *traceState) addInput(span trace.Span, data []byte) {
+func (s *traceState) setInput(span trace.Span, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputTrunc {
-		return
-	}
-	if s.maxBytes > 0 && int64(s.input.Len()+len(data)) > s.maxBytes {
-		remaining := s.maxBytes - int64(s.input.Len())
-		if remaining > 0 {
-			s.input.Write(data[:remaining])
+	s.input.Reset()
+	s.inputTrunc = false
+	s.setJSONLocked(&s.input, span, data, &s.inputTrunc, true)
+}
+
+func (s *traceState) setJSONLocked(builder *strings.Builder, span trace.Span, data []byte, truncated *bool, input bool) {
+	if s.maxBytes > 0 && int64(len(data)) > s.maxBytes {
+		// A byte slice cut from JSON can no longer be parsed by Langfuse. Keep
+		// an empty valid JSON object/array and mark the capture as truncated.
+		if input {
+			builder.WriteString("{}")
+		} else {
+			builder.WriteString("[]")
 		}
-		s.inputTrunc = true
-		span.SetAttributes(attribute.Bool("new_api.capture.input_truncated", true))
+		*truncated = true
+		if span != nil {
+			key := "new_api.capture.output_truncated"
+			if input {
+				key = "new_api.capture.input_truncated"
+			}
+			span.SetAttributes(attribute.Bool(key, true))
+		}
 		return
 	}
-	s.input.Write(data)
+	builder.Write(data)
 }
 
 func (s *traceState) addOutput(span trace.Span, data []byte) {
@@ -639,6 +666,23 @@ func (s *traceState) finalizeStreamOutput(span trace.Span) {
 		span.SetAttributes(attribute.Bool("new_api.capture.output_truncated", true))
 	}
 	s.output.Write(out.value)
+}
+
+func (s *traceState) finalizeCapturedOutput(span trace.Span) {
+	if s.output.Len() == 0 {
+		return
+	}
+	normalized, ok := normalizeLangfuseOutput([]byte(s.output.String()))
+	if !ok {
+		if s.outputTrunc {
+			s.output.Reset()
+			s.output.WriteString("[]")
+		}
+		return
+	}
+	s.output.Reset()
+	s.outputTrunc = false
+	s.setJSONLocked(&s.output, span, normalized, &s.outputTrunc, false)
 }
 
 func resolveExporterConfig(host string) (string, map[string]string, error) {

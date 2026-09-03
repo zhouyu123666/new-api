@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
@@ -92,7 +93,7 @@ func TestResolveExporterConfigUsesLangfuseCredentials(t *testing.T) {
 	require.Equal(t, "4", headers["x-langfuse-ingestion-version"])
 }
 
-func TestStartLLMRequestCapturesInputAndUsage(t *testing.T) {
+func TestRecordInputCapturesFilteredInputAndUsage(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	provider := trace.NewTracerProvider(trace.WithSpanProcessor(trace.NewSimpleSpanProcessor(exporter)))
 	runtime := &Runtime{
@@ -111,6 +112,13 @@ func TestStartLLMRequestCapturesInputAndUsage(t *testing.T) {
 	}
 	info := &common.RelayInfo{RequestId: "req-test", OriginModelName: "gpt-test", RelayFormat: "openai"}
 	ctx, span := runtime.StartLLMRequest(context.Background(), info, request)
+	inputBody := mustJSON(t, map[string]any{
+		"model":    "gpt-test",
+		"messages": request.Messages,
+		"stream":   true,
+		"metadata": map[string]any{"internal": true},
+	})
+	runtime.RecordInput(ctx, []byte(inputBody), types.RelayFormatOpenAI)
 	runtime.RecordUsage(ctx, 3, 5, 8, 42, 0.01, true)
 	runtime.FinishLLM(ctx, span, nil, info)
 
@@ -120,13 +128,56 @@ func TestStartLLMRequestCapturesInputAndUsage(t *testing.T) {
 	require.Equal(t, int64(5), attributeValue(spans[0].Attributes, "gen_ai.usage.output_tokens").AsInt64())
 	require.Equal(t, int64(8), attributeValue(spans[0].Attributes, "gen_ai.usage.total_tokens").AsInt64())
 	require.Equal(t, int64(42), attributeValue(spans[0].Attributes, "new_api.billing.quota").AsInt64())
-	require.Contains(t, attributeValue(spans[0].Attributes, "gen_ai.input.messages").AsString(), "hello")
+	require.JSONEq(t, `{"messages":[{"role":"user","content":"hello"}]}`, attributeValue(spans[0].Attributes, "gen_ai.input.messages").AsString())
+	require.NotContains(t, attributeValue(spans[0].Attributes, "gen_ai.input.messages").AsString(), "model")
+	require.NotContains(t, attributeValue(spans[0].Attributes, "gen_ai.input.messages").AsString(), "metadata")
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.input").AsString())
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.output").AsString())
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.model.name").AsString())
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "langfuse.observation.usage_details").AsString())
 	require.Equal(t, "", attributeValue(spans[0].Attributes, "new_api.billing.gateway_cost_usd").AsString())
 	require.JSONEq(t, `{"total":0.000084}`, attributeValue(spans[0].Attributes, "langfuse.observation.cost_details").AsString())
+}
+
+func TestBuildLangfuseInputKeepsProtocolContextOnly(t *testing.T) {
+	tests := []struct {
+		name   string
+		format types.RelayFormat
+		body   string
+		want   string
+	}{
+		{
+			name:   "chat",
+			format: types.RelayFormatOpenAI,
+			body:   `{"model":"gpt","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}],"stream":true,"metadata":{"x":1}}`,
+			want:   `{"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function"}]}`,
+		},
+		{
+			name:   "responses",
+			format: types.RelayFormatOpenAIResponses,
+			body:   `{"model":"gpt","instructions":"be concise","input":[{"role":"user","content":"hi"}],"tools":[],"include":["reasoning.encrypted_content"],"reasoning":{"effort":"xhigh"}}`,
+			want:   `{"instructions":"be concise","input":[{"role":"user","content":"hi"}],"tools":[]}`,
+		},
+		{
+			name:   "claude",
+			format: types.RelayFormatClaude,
+			body:   `{"model":"claude","system":"be helpful","messages":[{"role":"user","content":"hi"}],"tools":[],"thinking":{"type":"adaptive"},"metadata":{"session":"secret"}}`,
+			want:   `{"system":"be helpful","messages":[{"role":"user","content":"hi"}],"tools":[]}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := buildLangfuseInput([]byte(tt.body), tt.format)
+			require.True(t, ok)
+			require.JSONEq(t, tt.want, string(got))
+		})
+	}
+}
+
+func TestNormalizeLangfuseOutputDropsResponseMetadata(t *testing.T) {
+	got, ok := normalizeLangfuseOutput([]byte(`{"id":"resp_1","model":"gpt","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]}],"usage":{"input_tokens":1}}`))
+	require.True(t, ok)
+	require.JSONEq(t, `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}]`, string(got))
 }
 
 func TestStartLLMRequestPropagatesSessionID(t *testing.T) {
@@ -257,9 +308,9 @@ func TestRecordStreamChunkCapturesOneFinalJSONEvent(t *testing.T) {
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	output := attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString()
-	require.JSONEq(t, events[len(events)-1], output)
+	require.JSONEq(t, `[{"type":"message","content":[{"text":"hello","type":"output_text"}]}]`, output)
+	require.NotContains(t, output, "response.completed")
 	require.NotContains(t, output, "response.created")
-	require.NotContains(t, output, "response.output_text.delta")
 }
 
 func TestRecordStreamChunkFallsBackToDeltaWhenCompletedOutputIsEmpty(t *testing.T) {
@@ -286,10 +337,9 @@ func TestRecordStreamChunkFallsBackToDeltaWhenCompletedOutputIsEmpty(t *testing.
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	output := attributeValue(spans[0].Attributes, "gen_ai.output.messages").AsString()
-	var got map[string]any
+	var got []any
 	require.NoError(t, rootcommon.UnmarshalJsonStr(output, &got))
-	require.Equal(t, "response.completed", got["type"])
-	require.JSONEq(t, responsesAssistantOutputJSON("hello from delta"), mustJSON(t, got["response"].(map[string]any)["output"]))
+	require.JSONEq(t, responsesAssistantOutputJSON("hello from delta"), mustJSON(t, got))
 }
 
 func TestRecordStreamChunkKeepsPartialResponsesOutput(t *testing.T) {
@@ -446,12 +496,10 @@ func TestRecordStreamChunkRebuildsClaudeThinkingAndToolUse(t *testing.T) {
 	)
 }
 
-// responsesAssistantOutputJSON is the marshaled form of the assistant message
-// the shared relayconvert accumulator rebuilds. dto.ResponsesOutput has no
-// omitempty on its scalar fields, so the rebuilt item carries empty id/status/
-// quality/size keys that the upstream terminal frame would not have had.
+// responsesAssistantOutputJSON is the compact semantic form recorded for an
+// OpenAI Responses assistant message after response metadata is removed.
 func responsesAssistantOutputJSON(text string) string {
-	return fmt.Sprintf(`[{"type":"message","id":"","status":"","role":"assistant","quality":"","size":"","content":[{"type":"output_text","text":%q,"annotations":null}]}]`, text)
+	return fmt.Sprintf(`[{"type":"message","role":"assistant","content":[{"type":"output_text","text":%q}]}]`, text)
 }
 
 func mustJSON(t *testing.T, value any) string {

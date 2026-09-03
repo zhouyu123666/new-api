@@ -15,9 +15,8 @@ import (
 // reaches the trace; the aggregated output is only spliced in when that frame
 // arrives with an empty output array.
 type responsesStreamAggregator struct {
-	acc      *relayconvert.ResponsesBufferedAccumulator
-	final    *dto.ResponsesStreamResponse
-	finalRaw string
+	acc   *relayconvert.ResponsesBufferedAccumulator
+	final *dto.ResponsesStreamResponse
 }
 
 func newResponsesStreamAggregator(int64) streamAggregator {
@@ -36,7 +35,6 @@ func (a *responsesStreamAggregator) accept(data string) bool {
 	switch event.Type {
 	case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
 		a.final = &event
-		a.finalRaw = data
 	}
 	return true
 }
@@ -56,31 +54,19 @@ func (a *responsesStreamAggregator) output() streamOutput {
 		}
 		return streamOutput{value: value}
 	}
-	value := common.StringToByteSlice(a.finalRaw)
-	if a.final.Response == nil || len(a.final.Response.Output) == 0 {
-		if spliced, ok := spliceResponsesOutput(a.finalRaw, a.acc.BuildOutput()); ok {
-			value = spliced
-		}
+	var output []dto.ResponsesOutput
+	if a.final.Response != nil {
+		output = a.final.Response.Output
+	}
+	if len(output) == 0 {
+		output = a.acc.BuildOutput()
+	}
+	if len(output) == 0 {
+		return streamOutput{}
+	}
+	value, err := common.Marshal(output)
+	if err != nil {
+		return streamOutput{}
 	}
 	return streamOutput{value: value}
-}
-
-// spliceResponsesOutput replaces an empty output array in a terminal Responses
-// frame with the aggregated stream output, keeping every other field of the
-// original frame exactly as the upstream sent it.
-func spliceResponsesOutput(raw string, output []dto.ResponsesOutput) ([]byte, bool) {
-	if len(output) == 0 {
-		return nil, false
-	}
-	var envelope map[string]any
-	if err := common.UnmarshalJsonStr(raw, &envelope); err != nil {
-		return nil, false
-	}
-	response, ok := envelope["response"].(map[string]any)
-	if !ok {
-		return nil, false
-	}
-	response["output"] = output
-	spliced, err := common.Marshal(envelope)
-	return spliced, err == nil
 }
