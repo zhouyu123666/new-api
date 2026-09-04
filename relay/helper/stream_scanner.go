@@ -22,7 +22,6 @@ import (
 	"github.com/bytedance/gopkg/util/gopool"
 
 	"github.com/gin-gonic/gin"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -325,10 +324,6 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 
 	cleanup()
 	if otelRuntime != nil {
-		streamSpan.SetAttributes(
-			attribute.Int("new_api.stream.chunk_count", info.ReceivedResponseCount),
-			attribute.String("new_api.stream.end_reason", string(info.StreamStatus.EndReason)),
-		)
 		if !info.StreamStatus.IsNormalEnd() || info.StreamStatus.HasErrors() {
 			streamSpan.SetStatus(codes.Error, string(info.StreamStatus.EndReason))
 		}

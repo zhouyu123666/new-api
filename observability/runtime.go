@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/otel/attribute"
@@ -33,6 +35,7 @@ import (
 const (
 	serviceName             = "new-api"
 	defaultCaptureMaxBytes  = 4 << 20
+	maxLangfuseSessionIDLen = 200
 	traceContextKey         = "new_api_otel_trace"
 	llmRequestSpanName      = "newapi.llm.request"
 	relayAttemptSpanName    = "newapi.relay.attempt"
@@ -58,11 +61,21 @@ type Runtime struct {
 type traceState struct {
 	mu          sync.Mutex
 	span        trace.Span
+	sessionID   string
 	input       strings.Builder
 	output      strings.Builder
 	inputTrunc  bool
 	outputTrunc bool
 	maxBytes    int64
+
+	// apiType is the upstream API type of the relayed request, or
+	// apiTypeUnknown. It decides which stream aggregators are offered the
+	// first frame first.
+	apiType int
+
+	// streamAgg rebuilds the answer of a streamed response. It is chosen from
+	// the first recognized frame and owns every frame after that.
+	streamAgg streamAggregator
 }
 
 // BillingCostDetails describes the gateway-side USD amount associated with a
@@ -183,12 +196,19 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 	if !r.Enabled() {
 		return ctx, trace.SpanFromContext(ctx)
 	}
-	state := &traceState{maxBytes: r.captureMaxBytes}
+	// The channel is not always resolved yet, and its API type is only a hint
+	// for picking a stream aggregator.
+	apiType := apiTypeUnknown
+	if info != nil && info.HasChannelMeta() {
+		apiType = info.ApiType
+	}
+	sessionID := extractLangfuseSessionID(request)
+	state := &traceState{maxBytes: r.captureMaxBytes, apiType: apiType, sessionID: sessionID}
+	setSessionID(trace.SpanFromContext(ctx), sessionID)
 	spanAttrs := []attribute.KeyValue{
 		attribute.String("gen_ai.operation.name", "chat"),
 		attribute.String("gen_ai.request.model", info.OriginModelName),
 		attribute.String("langfuse.observation.type", "generation"),
-		attribute.String("langfuse.observation.model.name", info.OriginModelName),
 		attribute.String("new_api.request_id", info.RequestId),
 		attribute.String("new_api.relay_format", string(info.RelayFormat)),
 		attribute.Bool("new_api.request.stream", info.IsStream),
@@ -202,14 +222,28 @@ func (r *Runtime) StartLLMRequest(ctx context.Context, info *relaycommon.RelayIn
 	}
 	ctx, span := r.tracer.Start(ctx, llmRequestSpanName, startOptions...)
 	span.SetAttributes(spanAttrs...)
+	setSessionID(span, sessionID)
 	state.span = span
 	ctx = context.WithValue(ctx, traceContextKey, state)
-	if r.captureContent && request != nil {
-		if body, err := common.Marshal(request); err == nil {
-			state.addInput(span, body)
-		}
-	}
 	return ctx, span
+}
+
+// RecordInput stores a filtered copy of the final upstream request body for
+// Langfuse. It must be called after relay conversion and all request policies
+// have been applied, immediately before the upstream request is sent.
+func (r *Runtime) RecordInput(ctx context.Context, body []byte, format types.RelayFormat) {
+	if !r.Enabled() || !r.captureContent || len(body) == 0 {
+		return
+	}
+	state := stateFromContext(ctx)
+	if state == nil {
+		return
+	}
+	filtered, ok := buildLangfuseInput(body, format)
+	if !ok {
+		return
+	}
+	state.setInput(generationSpanFromContext(ctx), filtered)
 }
 
 func (r *Runtime) StartAttempt(ctx context.Context, info *relaycommon.RelayInfo, channelID int, channelType int, channelName string) (context.Context, trace.Span) {
@@ -222,6 +256,7 @@ func (r *Runtime) StartAttempt(ctx context.Context, info *relaycommon.RelayInfo,
 		attribute.Int("new_api.channel_type", channelType),
 		attribute.String("new_api.channel_name", channelName),
 	)
+	setSessionID(span, sessionIDFromContext(ctx))
 	// RelayInfo is intentionally not read here. The relay may replace or clear
 	// it while selecting a channel; observability must never be able to panic
 	// the request path. The request/model attributes are recorded on the parent
@@ -241,6 +276,7 @@ func (r *Runtime) StartProviderRequest(ctx context.Context, info *relaycommon.Re
 			attribute.String("http.request.method", req.Method),
 		)
 	}
+	setSessionID(span, sessionIDFromContext(ctx))
 	return ctx, span
 }
 
@@ -249,7 +285,7 @@ func (r *Runtime) StartStream(ctx context.Context, info *relaycommon.RelayInfo) 
 		return ctx, trace.SpanFromContext(ctx)
 	}
 	ctx, span := r.tracer.Start(ctx, streamSpanName, trace.WithSpanKind(trace.SpanKindInternal))
-	span.SetAttributes(attribute.Bool("new_api.stream.is_stream", true))
+	setSessionID(span, sessionIDFromContext(ctx))
 	return ctx, span
 }
 
@@ -268,7 +304,7 @@ func (r *Runtime) RecordStreamChunk(ctx context.Context, data string) {
 	if state == nil {
 		return
 	}
-	state.addOutput(state.span, []byte(data))
+	state.recordStreamEvent(data)
 }
 
 func (r *Runtime) WrapResponseBody(ctx context.Context, body io.ReadCloser) io.ReadCloser {
@@ -308,17 +344,9 @@ func (r *Runtime) recordUsage(ctx context.Context, promptTokens, completionToken
 		attribute.Float64("new_api.billing.model_price", modelPrice),
 		attribute.Bool("new_api.billing.use_price", usePrice),
 	)
-	if usage, err := common.Marshal(map[string]int{
-		"input":  promptTokens,
-		"output": completionTokens,
-		"total":  totalTokens,
-	}); err == nil {
-		span.SetAttributes(attribute.String("langfuse.observation.usage_details", string(usage)))
-	}
 	if costs != nil {
 		span.SetAttributes(
 			attribute.String("new_api.billing.cost_semantics", "gateway_charge_usd"),
-			attribute.Float64("new_api.billing.gateway_cost_usd", costs.TotalUSD),
 		)
 		costDetails := map[string]float64{"total": costs.TotalUSD}
 		if costs.InputUSD != nil {
@@ -331,11 +359,7 @@ func (r *Runtime) recordUsage(ctx context.Context, promptTokens, completionToken
 			span.SetAttributes(attribute.String("langfuse.observation.cost_details", string(cost)))
 		}
 	} else if quota > 0 && common.QuotaPerUnit > 0 && !math.IsNaN(common.QuotaPerUnit) && !math.IsInf(common.QuotaPerUnit, 0) {
-		gatewayCostUSD := float64(quota) / common.QuotaPerUnit
-		span.SetAttributes(
-			attribute.String("new_api.billing.cost_semantics", "gateway_charge_usd"),
-			attribute.Float64("new_api.billing.gateway_cost_usd", gatewayCostUSD),
-		)
+		span.SetAttributes(attribute.String("new_api.billing.cost_semantics", "gateway_charge_usd"))
 		// The settled quota is the only value that includes group, request,
 		// tool, cache, and other multipliers consistently across billing modes.
 		// Keep a total-only fallback for callers that do not have a reliable
@@ -409,16 +433,16 @@ func (r *Runtime) FinishLLM(ctx context.Context, span trace.Span, err error, inf
 	}
 	if state := stateFromContext(ctx); state != nil {
 		state.mu.Lock()
+		state.finalizeStreamOutput(span)
+		state.finalizeCapturedOutput(span)
 		if state.input.Len() > 0 {
 			span.SetAttributes(
 				attribute.String("gen_ai.input.messages", state.input.String()),
-				attribute.String("langfuse.observation.input", state.input.String()),
 			)
 		}
 		if state.output.Len() > 0 {
 			span.SetAttributes(
 				attribute.String("gen_ai.output.messages", state.output.String()),
-				attribute.String("langfuse.observation.output", state.output.String()),
 			)
 		}
 		state.mu.Unlock()
@@ -457,6 +481,80 @@ func stateFromContext(ctx context.Context) *traceState {
 	return state
 }
 
+func sessionIDFromContext(ctx context.Context) string {
+	if state := stateFromContext(ctx); state != nil {
+		return state.sessionID
+	}
+	return ""
+}
+
+func setSessionID(span trace.Span, sessionID string) {
+	if span == nil || sessionID == "" {
+		return
+	}
+	span.SetAttributes(attribute.String("session.id", sessionID))
+}
+
+func extractLangfuseSessionID(request dto.Request) string {
+	var sessionID string
+	switch request := request.(type) {
+	case *dto.OpenAIResponsesRequest:
+		// Codex includes its conversation identifier in Responses
+		// client_metadata.session_id.
+		if request == nil || len(request.ClientMetadata) == 0 {
+			return ""
+		}
+		var metadata struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := common.Unmarshal([]byte(request.ClientMetadata), &metadata); err != nil {
+			return ""
+		}
+		sessionID = metadata.SessionID
+	case *dto.ClaudeRequest:
+		// Claude Code nests its session identifier in metadata.user_id.session_id.
+		// Depending on the client version, user_id is either an object or a
+		// JSON-encoded string containing that object.
+		if request == nil || len(request.Metadata) == 0 {
+			return ""
+		}
+		var metadata struct {
+			UserID json.RawMessage `json:"user_id"`
+		}
+		if err := common.Unmarshal([]byte(request.Metadata), &metadata); err != nil {
+			return ""
+		}
+		var userID struct {
+			SessionID string `json:"session_id"`
+		}
+		if err := common.Unmarshal(metadata.UserID, &userID); err == nil {
+			sessionID = userID.SessionID
+			break
+		}
+		var encodedUserID string
+		if err := common.Unmarshal(metadata.UserID, &encodedUserID); err != nil {
+			return ""
+		}
+		if err := common.Unmarshal([]byte(encodedUserID), &userID); err != nil {
+			return ""
+		}
+		sessionID = userID.SessionID
+	default:
+		return ""
+	}
+
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || len(sessionID) >= maxLangfuseSessionIDLen {
+		return ""
+	}
+	for i := 0; i < len(sessionID); i++ {
+		if sessionID[i] > 0x7f {
+			return ""
+		}
+	}
+	return sessionID
+}
+
 type captureReadCloser struct {
 	io.ReadCloser
 	state *traceState
@@ -470,27 +568,43 @@ func (r *captureReadCloser) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *traceState) addInput(span trace.Span, data []byte) {
+func (s *traceState) setInput(span trace.Span, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.inputTrunc {
-		return
-	}
-	if s.maxBytes > 0 && int64(s.input.Len()+len(data)) > s.maxBytes {
-		remaining := s.maxBytes - int64(s.input.Len())
-		if remaining > 0 {
-			s.input.Write(data[:remaining])
+	s.input.Reset()
+	s.inputTrunc = false
+	s.setJSONLocked(&s.input, span, data, &s.inputTrunc, true)
+}
+
+func (s *traceState) setJSONLocked(builder *strings.Builder, span trace.Span, data []byte, truncated *bool, input bool) {
+	if s.maxBytes > 0 && int64(len(data)) > s.maxBytes {
+		// A byte slice cut from JSON can no longer be parsed by Langfuse. Keep
+		// an empty valid JSON object/array and mark the capture as truncated.
+		if input {
+			builder.WriteString("{}")
+		} else {
+			builder.WriteString("[]")
 		}
-		s.inputTrunc = true
-		span.SetAttributes(attribute.Bool("new_api.capture.input_truncated", true))
+		*truncated = true
+		if span != nil {
+			key := "new_api.capture.output_truncated"
+			if input {
+				key = "new_api.capture.input_truncated"
+			}
+			span.SetAttributes(attribute.Bool(key, true))
+		}
 		return
 	}
-	s.input.Write(data)
+	builder.Write(data)
 }
 
 func (s *traceState) addOutput(span trace.Span, data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.writeOutputLocked(span, data)
+}
+
+func (s *traceState) writeOutputLocked(span trace.Span, data []byte) {
 	if s.outputTrunc {
 		return
 	}
@@ -504,6 +618,71 @@ func (s *traceState) addOutput(span trace.Span, data []byte) {
 		return
 	}
 	s.output.Write(data)
+}
+
+// recordStreamEvent consumes stream frames without exporting them
+// individually. The first recognized frame picks the aggregator for the
+// upstream protocol, and FinishLLM turns what that aggregator collected into a
+// single output value.
+func (s *traceState) recordStreamEvent(data string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.streamAgg != nil {
+		s.streamAgg.accept(data)
+		return
+	}
+	// The upstream API type decides which protocols are tried first. A frame
+	// none of them recognizes is still offered to the rest, so an upstream
+	// speaking a protocol its API type does not advertise keeps its output.
+	for _, preferred := range []bool{true, false} {
+		for _, entry := range streamAggregators {
+			if entry.preferredFor(s.apiType) != preferred {
+				continue
+			}
+			aggregator := entry.newAggregator(s.maxBytes)
+			if aggregator.accept(data) {
+				s.streamAgg = aggregator
+				return
+			}
+		}
+	}
+}
+
+func (s *traceState) finalizeStreamOutput(span trace.Span) {
+	if s.streamAgg == nil {
+		return
+	}
+	out := s.streamAgg.output()
+	s.output.Reset()
+	if len(out.value) == 0 {
+		return
+	}
+	if !out.selfCapped {
+		s.writeOutputLocked(span, out.value)
+		return
+	}
+	if out.truncated {
+		s.outputTrunc = true
+		span.SetAttributes(attribute.Bool("new_api.capture.output_truncated", true))
+	}
+	s.output.Write(out.value)
+}
+
+func (s *traceState) finalizeCapturedOutput(span trace.Span) {
+	if s.output.Len() == 0 {
+		return
+	}
+	normalized, ok := normalizeLangfuseOutput([]byte(s.output.String()))
+	if !ok {
+		if s.outputTrunc {
+			s.output.Reset()
+			s.output.WriteString("[]")
+		}
+		return
+	}
+	s.output.Reset()
+	s.outputTrunc = false
+	s.setJSONLocked(&s.output, span, normalized, &s.outputTrunc, false)
 }
 
 func resolveExporterConfig(host string) (string, map[string]string, error) {

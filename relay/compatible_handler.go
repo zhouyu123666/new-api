@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/observability"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -113,6 +114,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
+			if otelRuntime := observability.FromContext(c.Request.Context()); otelRuntime != nil {
+				otelRuntime.RecordInput(c.Request.Context(), jsonData, info.GetFinalRequestRelayFormat())
+			}
 			relaycommon.ApplyGPTReasoningEffortCap(info)
 			body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
 			if err != nil {
@@ -121,6 +125,11 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			defer closer.Close()
 			requestBody = body
 		} else {
+			if otelRuntime := observability.FromContext(c.Request.Context()); otelRuntime != nil {
+				if storedBytes, bytesErr := storage.Bytes(); bytesErr == nil {
+					otelRuntime.RecordInput(c.Request.Context(), storedBytes, info.GetFinalRequestRelayFormat())
+				}
+			}
 			requestBody = common.NewReplayableBodyReader(storage)
 		}
 	} else {
@@ -204,6 +213,9 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
 			relaycommon.ApplyGPTReasoningEffortCap(info)
+		}
+		if otelRuntime := observability.FromContext(c.Request.Context()); otelRuntime != nil {
+			otelRuntime.RecordInput(c.Request.Context(), jsonData, info.GetFinalRequestRelayFormat())
 		}
 
 		logger.LogDebug(c, "text request body: %s", jsonData)
