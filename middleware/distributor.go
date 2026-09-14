@@ -465,6 +465,19 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
 	key, index, newAPIError := channel.GetNextEnabledKey()
+	if newAPIError != nil && c.GetBool("channel_health_check") && channel.Status == common.ChannelStatusAutoDisabled {
+		keys := channel.GetKeys()
+		for keyIndex, candidate := range keys {
+			if channel.ChannelInfo.MultiKeyStatusList != nil && channel.ChannelInfo.MultiKeyStatusList[keyIndex] == common.ChannelStatusManuallyDisabled {
+				continue
+			}
+			// A channel may be auto-disabled after every key in its upstream pool
+			// was marked unavailable. Health checks must still be able to probe one
+			// key; a successful probe will clear the channel-level state on recovery.
+			key, index, newAPIError = candidate, keyIndex, nil
+			break
+		}
+	}
 	if newAPIError != nil {
 		return newAPIError
 	}

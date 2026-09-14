@@ -164,6 +164,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	//c.Request.Header.Set("Authorization", "Bearer "+channel.Key)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("channel", channel.Type)
+	c.Set("channel_health_check", true)
 	c.Set("base_url", channel.GetBaseURL())
 	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
@@ -439,6 +440,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		httpResp = resp.(*http.Response)
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
+			service.ResetStatusCode(err, channel.GetStatusCodeMapping())
 			common.SysError(fmt.Sprintf(
 				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%v",
 				channel.Id,
@@ -452,7 +454,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			return testResult{
 				context:     c,
 				localErr:    err,
-				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError),
+				newAPIError: err,
 			}
 		}
 	}
@@ -924,8 +926,17 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 
 	shouldBanChannel := false
 	newAPIError := result.newAPIError
+	channelFailureThresholdReached := false
 	if newAPIError != nil {
-		shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
+		shouldBanChannel = service.ShouldDisableChannel(newAPIError)
+		if channel.GetAutoBan() && service.IsChannelFailureMatch(newAPIError) {
+			channelFailureThresholdReached = service.RecordChannelFailure(channel.Id)
+			// Matching aggregate errors use the channel-level threshold instead of
+			// immediately disabling only the selected multi-key account.
+			shouldBanChannel = channelFailureThresholdReached
+		} else {
+			service.ResetChannelFailureConsecutive(channel.Id)
+		}
 	}
 
 	if common.AutomaticDisableChannelEnabled && !shouldBanChannel {
@@ -937,18 +948,33 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if newAPIError == nil {
+		service.ResetChannelFailureConsecutive(channel.Id)
 		summary.Succeeded++
 	} else {
 		summary.Failed++
 	}
 
 	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
+		channelError := *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan())
+		if channelFailureThresholdReached {
+			// The aggregate counter was already incremented above. Disable the
+			// whole channel without marking the selected multi-key account alone.
+			channelError.UsingKey = ""
+			service.DisableChannel(channelError, newAPIError.ErrorWithStatusCode())
+		} else {
+			processChannelError(result.context, channelError, newAPIError)
+		}
 		summary.Disabled++
 	}
 
 	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-		service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
+		usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
+		if channel.ChannelInfo.IsMultiKey {
+			// Recovery is channel-scoped. A successful health probe should restore
+			// the account pool rather than only the key used by the probe.
+			usingKey = ""
+		}
+		service.EnableChannel(channel.Id, usingKey, channel.Name)
 		summary.Enabled++
 	}
 

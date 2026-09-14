@@ -229,6 +229,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.ResetChannelFailureConsecutive(channel.Id)
 			relayInfo.LastError = nil
 			return
 		}
@@ -364,8 +365,26 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	if service.ShouldDisableChannel(err) && channelError.AutoBan {
+	usingKey := channelError.UsingKey
+	shouldDisable := service.ShouldDisableChannel(err)
+	thresholdReached := false
+	if channelError.AutoBan && service.IsChannelFailureMatch(err) {
+		thresholdReached = service.RecordChannelFailure(channelError.ChannelId)
+		// Matching aggregate errors use the channel-level threshold instead of
+		// immediately disabling only the selected multi-key account.
+		shouldDisable = thresholdReached
+		if thresholdReached {
+			// Aggregate failures indicate that the channel's upstream account pool
+			// is unavailable. Disable the whole channel instead of only the key
+			// selected for this request.
+			usingKey = ""
+		}
+	} else {
+		service.ResetChannelFailureConsecutive(channelError.ChannelId)
+	}
+	if shouldDisable && channelError.AutoBan {
 		gopool.Go(func() {
+			channelError.UsingKey = usingKey
 			service.DisableChannel(channelError, err.ErrorWithStatusCode())
 		})
 	}
@@ -579,6 +598,9 @@ func RelayTask(c *gin.Context) {
 
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
+		if relayInfo.ChannelMeta != nil {
+			service.ResetChannelFailureConsecutive(relayInfo.ChannelMeta.ChannelId)
+		}
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())
 		}

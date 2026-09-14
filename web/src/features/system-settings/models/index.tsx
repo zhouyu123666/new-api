@@ -78,6 +78,12 @@ const defaultModelSettings: ModelSettings = {
   'monitor_setting.auto_test_channel_minutes': 10,
   'monitor_setting.channel_test_concurrency': 1,
   'monitor_setting.channel_test_mode': 'scheduled_all',
+  'monitor_setting.channel_error_window_minutes': 5,
+  'monitor_setting.channel_error_threshold': 20,
+  'monitor_setting.channel_error_consecutive_threshold': 10,
+  'monitor_setting.channel_error_status_codes': '429,503',
+  'monitor_setting.channel_error_keywords':
+    'Codex 账号用量窗口已达上限\n无可用账号，请稍后重试\ncodex2api当前账号池没有可用额度\ncodex2api当前没有可调度账号',
   'channel_affinity_setting.enabled': false,
   'channel_affinity_setting.switch_on_success': true,
   'channel_affinity_setting.keep_on_channel_disabled': false,

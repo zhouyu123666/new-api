@@ -247,6 +247,11 @@ export type ModelSettings = {
     | 'scheduled_all'
     | 'auto_ban_only'
     | 'passive_recovery'
+  'monitor_setting.channel_error_window_minutes': number
+  'monitor_setting.channel_error_threshold': number
+  'monitor_setting.channel_error_consecutive_threshold': number
+  'monitor_setting.channel_error_status_codes': string
+  'monitor_setting.channel_error_keywords': string
   'channel_affinity_setting.enabled': boolean
   'channel_affinity_setting.switch_on_success': boolean
   'channel_affinity_setting.keep_on_channel_disabled': boolean

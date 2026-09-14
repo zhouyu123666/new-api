@@ -659,6 +659,29 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 	if len(keys) == 0 {
 		channel.Status = status
 	} else {
+		if status == common.ChannelStatusEnabled && channel.Status == common.ChannelStatusAutoDisabled {
+			// Recovery of an auto-disabled multi-key channel probes one available
+			// account, then clears only auto-disabled accounts. Manually disabled
+			// accounts must remain disabled after channel recovery.
+			for keyIndex, keyStatus := range channel.ChannelInfo.MultiKeyStatusList {
+				if keyStatus != common.ChannelStatusAutoDisabled {
+					continue
+				}
+				delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
+				if channel.ChannelInfo.MultiKeyDisabledReason != nil {
+					delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
+				}
+				if channel.ChannelInfo.MultiKeyDisabledTime != nil {
+					delete(channel.ChannelInfo.MultiKeyDisabledTime, keyIndex)
+				}
+			}
+			channel.Status = common.ChannelStatusEnabled
+			info := channel.GetOtherInfo()
+			info["status_reason"] = reason
+			info["status_time"] = common.GetTimestamp()
+			channel.SetOtherInfo(info)
+			return
+		}
 		keyIndex := -1
 		for i, key := range keys {
 			if key == usingKey {

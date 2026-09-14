@@ -98,6 +98,16 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.channel_test_concurrency'],
           'monitor_setting.channel_test_mode':
             settings['monitor_setting.channel_test_mode'],
+          'monitor_setting.channel_error_window_minutes':
+            settings['monitor_setting.channel_error_window_minutes'],
+          'monitor_setting.channel_error_threshold':
+            settings['monitor_setting.channel_error_threshold'],
+          'monitor_setting.channel_error_consecutive_threshold':
+            settings['monitor_setting.channel_error_consecutive_threshold'],
+          'monitor_setting.channel_error_status_codes':
+            settings['monitor_setting.channel_error_status_codes'],
+          'monitor_setting.channel_error_keywords':
+            settings['monitor_setting.channel_error_keywords'],
         }}
       />
     ),

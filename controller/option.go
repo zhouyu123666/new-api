@@ -317,6 +317,33 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "monitor_setting.channel_error_status_codes":
+		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "monitor_setting.channel_error_window_minutes":
+		value, parseErr := strconv.Atoi(option.Value.(string))
+		if parseErr != nil || value < 1 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "渠道失败统计窗口必须是大于 0 的整数",
+			})
+			return
+		}
+	case "monitor_setting.channel_error_threshold", "monitor_setting.channel_error_consecutive_threshold":
+		value, parseErr := strconv.Atoi(option.Value.(string))
+		if parseErr != nil || value < 0 {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "渠道失败阈值必须是非负整数",
+			})
+			return
+		}
 	case "AutomaticRetryStatusCodes":
 		_, err = operation_setting.ParseHTTPStatusCodeRanges(option.Value.(string))
 		if err != nil {
