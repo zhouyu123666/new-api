@@ -54,6 +54,10 @@ func Distribute() func(c *gin.Context) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
+			if modelRequest.Model != "" && model.IsChannelModelDisabled(channel.Id, modelRequest.Model) {
+				abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": modelRequest.Group, "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
+				return
+			}
 		} else {
 			// Select a channel for the user
 			// check token model mapping

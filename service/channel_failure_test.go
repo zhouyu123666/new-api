@@ -25,8 +25,8 @@ func setupChannelFailureTest(t *testing.T) {
 	setting.ChannelErrorThreshold = 20
 	setting.ChannelErrorConsecutiveThreshold = 10
 	setting.ChannelErrorStatusCodes = operation_setting.DefaultChannelErrorStatusCodes
-	setting.ChannelErrorKeywords = operation_setting.DefaultChannelErrorKeywords
-	channelFailureStates.values = make(map[int]channelFailureState)
+	setting.ChannelModelCircuitBreakerEnabled = true
+	channelFailureStates.values = make(map[channelModelFailureKey]channelFailureState)
 
 	t.Cleanup(func() {
 		common.AutomaticDisableChannelEnabled = previousEnabled
@@ -36,7 +36,7 @@ func setupChannelFailureTest(t *testing.T) {
 	})
 }
 
-func TestIsChannelFailureMatchRequiresStatusCodeAndKeyword(t *testing.T) {
+func TestIsChannelModelFailureMatchUsesOnlyConfiguredUpstreamStatusCode(t *testing.T) {
 	setupChannelFailureTest(t)
 
 	cases := []struct {
@@ -45,123 +45,114 @@ func TestIsChannelFailureMatchRequiresStatusCodeAndKeyword(t *testing.T) {
 		statusCode int
 		want       bool
 	}{
-		{
-			name:       "upstream account pool exhausted",
-			message:    "无可用账号，请稍后重试",
-			statusCode: 503,
-			want:       true,
-		},
-		{
-			name:       "upstream usage window exhausted",
-			message:    "Codex 账号用量窗口已达上限",
-			statusCode: 429,
-			want:       true,
-		},
-		{
-			name:       "kiro account pool empty",
-			message:    "No available accounts",
-			statusCode: 503,
-			want:       true,
-		},
-		{
-			// A per-key quota rejection shares the pool-failure status code but
-			// names the API key. The channel itself is healthy, so disabling it
-			// would take a working upstream out of rotation.
-			name:       "per-key rate limit is not a channel failure",
-			message:    "API key rate limit exceeded: 60 requests per minute",
-			statusCode: 429,
-			want:       false,
-		},
-		{
-			name:       "per-key token limit is not a channel failure",
-			message:    "token limit exceeded",
-			statusCode: 429,
-			want:       false,
-		},
-		{
-			// The keyword alone must not be enough: an unrelated status code
-			// means the request did not fail the way the rule describes.
-			name:       "pool keyword with unmatched status code",
-			message:    "无可用账号，请稍后重试",
-			statusCode: 400,
-			want:       false,
-		},
-		{
-			name:       "unrelated error",
-			message:    "bad request",
-			statusCode: 400,
-			want:       false,
-		},
+		{name: "rate limit", message: "API key rate limit exceeded", statusCode: 429, want: true},
+		{name: "account pool unavailable", message: "No available accounts", statusCode: 503, want: true},
+		{name: "unconfigured status", message: "bad request", statusCode: 400, want: false},
 	}
 
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			err := types.NewOpenAIError(errors.New(testCase.message), types.ErrorCodeBadResponseStatusCode, testCase.statusCode)
-			assert.Equal(t, testCase.want, IsChannelFailureMatch(err))
+			assert.Equal(t, testCase.want, IsChannelModelFailureMatch(err))
 		})
 	}
 }
 
-func TestIsChannelFailureMatchUsesUpstreamStatusCodeAfterMapping(t *testing.T) {
+func TestIsChannelModelFailureMatchUsesUpstreamStatusCodeAfterMapping(t *testing.T) {
 	setupChannelFailureTest(t)
 
-	// A channel may remap 429 to a code clients will not retry. The rule
-	// describes upstream behavior, so the mapping must not hide the failure.
-	err := types.NewOpenAIError(errors.New("Codex 账号用量窗口已达上限"), types.ErrorCodeBadResponseStatusCode, 429)
+	err := types.NewOpenAIError(errors.New("rate limited"), types.ErrorCodeBadResponseStatusCode, 429)
 	ResetStatusCode(err, `{"429": "500"}`)
 	require.Equal(t, 500, err.StatusCode)
 	require.Equal(t, 429, err.UpstreamStatusCode())
-	assert.True(t, IsChannelFailureMatch(err))
+	assert.True(t, IsChannelModelFailureMatch(err))
 }
 
-func TestIsChannelFailureMatchWithSingleSidedConfiguration(t *testing.T) {
+func TestRecordChannelModelFailureKeepsModelsIndependent(t *testing.T) {
 	setupChannelFailureTest(t)
 	setting := operation_setting.GetMonitorSetting()
-
-	poolError := types.NewOpenAIError(errors.New("无可用账号，请稍后重试"), types.ErrorCodeBadResponseStatusCode, 503)
-	keyError := types.NewOpenAIError(errors.New("API key rate limit exceeded: 60 requests per minute"), types.ErrorCodeBadResponseStatusCode, 429)
-
-	// Keywords only: the status code no longer constrains matching.
-	setting.ChannelErrorStatusCodes = ""
-	assert.True(t, IsChannelFailureMatch(poolError))
-	assert.False(t, IsChannelFailureMatch(keyError))
-
-	// Status codes only: every listed code counts, keywords are not consulted.
-	setting.ChannelErrorStatusCodes = "429,503"
-	setting.ChannelErrorKeywords = ""
-	assert.True(t, IsChannelFailureMatch(poolError))
-	assert.True(t, IsChannelFailureMatch(keyError))
-
-	// Neither side configured: the rule is inert rather than matching everything.
-	setting.ChannelErrorStatusCodes = ""
-	assert.False(t, IsChannelFailureMatch(poolError))
-	assert.False(t, IsChannelFailureMatch(keyError))
-}
-
-func TestRecordChannelFailureTriggersConfiguredThresholds(t *testing.T) {
-	setupChannelFailureTest(t)
-	setting := operation_setting.GetMonitorSetting()
-	setting.ChannelErrorThreshold = 3
+	setting.ChannelErrorThreshold = 2
 	setting.ChannelErrorConsecutiveThreshold = 0
 
-	assert.False(t, RecordChannelFailure(1001))
-	assert.False(t, RecordChannelFailure(1001))
-	assert.True(t, RecordChannelFailure(1001))
-	assert.True(t, RecordChannelFailure(1001), "the threshold remains reached until counters are cleared")
+	assert.False(t, RecordChannelModelFailure(1001, "model-a"))
+	assert.False(t, RecordChannelModelFailure(1001, "model-b"))
+	assert.True(t, RecordChannelModelFailure(1001, "model-a"))
+	assert.False(t, RecordChannelModelFailure(1002, "model-a"))
 
-	ClearChannelFailureCounters(1001)
-	assert.False(t, RecordChannelFailure(1001))
+	ClearChannelModelFailureCounters(1001, "model-a")
+	assert.False(t, RecordChannelModelFailure(1001, "model-a"))
 }
 
-func TestRecordChannelFailureConsecutiveReset(t *testing.T) {
+func TestResetChannelModelFailureConsecutiveOnlyResetsRequestedPair(t *testing.T) {
 	setupChannelFailureTest(t)
 	setting := operation_setting.GetMonitorSetting()
 	setting.ChannelErrorThreshold = 0
 	setting.ChannelErrorConsecutiveThreshold = 3
 
-	assert.False(t, RecordChannelFailure(1002))
-	ResetChannelFailureConsecutive(1002)
-	assert.False(t, RecordChannelFailure(1002))
-	assert.False(t, RecordChannelFailure(1002))
-	assert.True(t, RecordChannelFailure(1002))
+	assert.False(t, RecordChannelModelFailure(1002, "model-a"))
+	assert.False(t, RecordChannelModelFailure(1002, "model-b"))
+	ResetChannelModelFailureConsecutive(1002, "model-a")
+	assert.False(t, RecordChannelModelFailure(1002, "model-a"))
+	assert.False(t, RecordChannelModelFailure(1002, "model-a"))
+	assert.False(t, RecordChannelModelFailure(1002, "model-b"))
+	assert.True(t, RecordChannelModelFailure(1002, "model-b"))
+}
+
+func TestRecordChannelModelFailureCapsConsecutiveCounter(t *testing.T) {
+	setupChannelFailureTest(t)
+	setting := operation_setting.GetMonitorSetting()
+	setting.ChannelErrorThreshold = 0
+	setting.ChannelErrorConsecutiveThreshold = 2
+
+	assert.False(t, RecordChannelModelFailure(1003, "model-a"))
+	assert.True(t, RecordChannelModelFailure(1003, "model-a"))
+	assert.True(t, RecordChannelModelFailure(1003, "model-a"))
+
+	state := channelFailureStates.values[channelModelFailureKey{channelID: 1003, modelName: "model-a"}]
+	assert.Equal(t, 2, state.consecutiveCount)
+}
+
+func TestRecordChannelModelFailureCapsWindowEntries(t *testing.T) {
+	setupChannelFailureTest(t)
+	setting := operation_setting.GetMonitorSetting()
+	setting.ChannelErrorThreshold = 2
+	setting.ChannelErrorConsecutiveThreshold = 0
+
+	assert.False(t, RecordChannelModelFailure(1004, "model-a"))
+	assert.True(t, RecordChannelModelFailure(1004, "model-a"))
+	assert.True(t, RecordChannelModelFailure(1004, "model-a"))
+
+	state := channelFailureStates.values[channelModelFailureKey{channelID: 1004, modelName: "model-a"}]
+	assert.Len(t, state.failureTimes, 2)
+}
+
+func TestDisabledChannelModelCircuitBreakerDoesNotMatchOrRecord(t *testing.T) {
+	setupChannelFailureTest(t)
+	setting := operation_setting.GetMonitorSetting()
+	setting.ChannelModelCircuitBreakerEnabled = false
+	err := types.NewOpenAIError(errors.New("rate limited"), types.ErrorCodeBadResponseStatusCode, 429)
+
+	assert.False(t, IsChannelModelFailureMatch(err))
+	assert.False(t, RecordChannelModelFailure(1005, "model-a"))
+	assert.Empty(t, channelFailureStates.values)
+}
+
+func TestClearAllChannelModelFailureCountersClearsEveryMemoryPair(t *testing.T) {
+	setupChannelFailureTest(t)
+	require.False(t, RecordChannelModelFailure(1006, "model-a"))
+	require.False(t, RecordChannelModelFailure(1006, "model-b"))
+	require.NotEmpty(t, channelFailureStates.values)
+
+	require.NoError(t, ClearAllChannelModelFailureCounters())
+	assert.Empty(t, channelFailureStates.values)
+}
+
+func TestExcludedChannelDoesNotAccumulateFailures(t *testing.T) {
+	setupChannelFailureTest(t)
+	operation_setting.GetMonitorSetting().ChannelModelExcludedChannelIDs = "1007"
+
+	assert.False(t, RecordChannelModelFailure(1007, "model-a"))
+	assert.Empty(t, channelFailureStates.values)
+	assert.False(t, RecordChannelModelFailure(1008, "model-a"))
+	assert.NotEmpty(t, channelFailureStates.values)
 }

@@ -211,6 +211,12 @@ export const STATIC_I18N_KEYS = [
 
   // Models section-registry nav (dynamic titleKey)
   'Grok',
+  'Channel-model circuit breaker',
+  'Channel-model recovery probes',
+  'Route disabled',
+  'Recovery probe succeeded',
+  'Recovery probe failed',
+  'Route recovered',
 
   // GPT request parameter policy (dynamic labels)
   'Disable fast',

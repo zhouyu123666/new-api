@@ -98,20 +98,6 @@ const createRoutingReliabilitySchema = (
             t('Channel test concurrency must be between 1 and 32')
           ),
         channel_test_mode: z.enum(channelTestModes),
-        channel_error_window_minutes: z.coerce
-          .number()
-          .int()
-          .min(1, t('Enter a positive integer')),
-        channel_error_threshold: z.coerce
-          .number()
-          .int()
-          .min(0, t('Enter a non-negative integer')),
-        channel_error_consecutive_threshold: z.coerce
-          .number()
-          .int()
-          .min(0, t('Enter a non-negative integer')),
-        channel_error_status_codes: z.string(),
-        channel_error_keywords: z.string(),
       }),
     })
     .superRefine((values, ctx) => {
@@ -141,18 +127,6 @@ const createRoutingReliabilitySchema = (
         })
       }
 
-      const channelErrorParsed = parseHttpStatusCodeRules(
-        values.monitor_setting.channel_error_status_codes
-      )
-      if (!channelErrorParsed.ok) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['monitor_setting', 'channel_error_status_codes'],
-          message: t('Invalid status code rules: {{tokens}}', {
-            tokens: channelErrorParsed.invalidTokens.join(', '),
-          }),
-        })
-      }
     })
 
 type RoutingReliabilitySchema = ReturnType<
@@ -174,11 +148,6 @@ type RoutingReliabilitySectionProps = {
     'monitor_setting.auto_test_channel_minutes': number
     'monitor_setting.channel_test_concurrency': number
     'monitor_setting.channel_test_mode': ChannelTestMode
-    'monitor_setting.channel_error_window_minutes': number
-    'monitor_setting.channel_error_threshold': number
-    'monitor_setting.channel_error_consecutive_threshold': number
-    'monitor_setting.channel_error_status_codes': string
-    'monitor_setting.channel_error_keywords': string
   }
 }
 
@@ -198,11 +167,6 @@ type NormalizedRoutingReliabilityValues = {
   'monitor_setting.auto_test_channel_minutes': number
   'monitor_setting.channel_test_concurrency': number
   'monitor_setting.channel_test_mode': ChannelTestMode
-  'monitor_setting.channel_error_window_minutes': number
-  'monitor_setting.channel_error_threshold': number
-  'monitor_setting.channel_error_consecutive_threshold': number
-  'monitor_setting.channel_error_status_codes': string
-  'monitor_setting.channel_error_keywords': string
 }
 
 function normalizeChannelTestMode(value?: string): ChannelTestMode {
@@ -234,17 +198,6 @@ const buildFormDefaults = (
     channel_test_mode: normalizeChannelTestMode(
       defaults['monitor_setting.channel_test_mode']
     ),
-    channel_error_window_minutes:
-      defaults['monitor_setting.channel_error_window_minutes'],
-    channel_error_threshold:
-      defaults['monitor_setting.channel_error_threshold'],
-    channel_error_consecutive_threshold:
-      defaults['monitor_setting.channel_error_consecutive_threshold'],
-    channel_error_status_codes:
-      defaults['monitor_setting.channel_error_status_codes'] ?? '',
-    channel_error_keywords: normalizeLineEndings(
-      defaults['monitor_setting.channel_error_keywords'] ?? ''
-    ),
   },
 })
 
@@ -273,18 +226,6 @@ const normalizeDefaults = (
   'monitor_setting.channel_test_mode': normalizeChannelTestMode(
     defaults['monitor_setting.channel_test_mode']
   ),
-  'monitor_setting.channel_error_window_minutes':
-    defaults['monitor_setting.channel_error_window_minutes'],
-  'monitor_setting.channel_error_threshold':
-    defaults['monitor_setting.channel_error_threshold'],
-  'monitor_setting.channel_error_consecutive_threshold':
-    defaults['monitor_setting.channel_error_consecutive_threshold'],
-  'monitor_setting.channel_error_status_codes': parseHttpStatusCodeRules(
-    defaults['monitor_setting.channel_error_status_codes'] ?? ''
-  ).normalized,
-  'monitor_setting.channel_error_keywords': normalizeLineEndings(
-    defaults['monitor_setting.channel_error_keywords'] ?? ''
-  ),
 })
 
 const normalizeFormValues = (
@@ -310,18 +251,6 @@ const normalizeFormValues = (
   'monitor_setting.channel_test_concurrency':
     values.monitor_setting.channel_test_concurrency,
   'monitor_setting.channel_test_mode': values.monitor_setting.channel_test_mode,
-  'monitor_setting.channel_error_window_minutes':
-    values.monitor_setting.channel_error_window_minutes,
-  'monitor_setting.channel_error_threshold':
-    values.monitor_setting.channel_error_threshold,
-  'monitor_setting.channel_error_consecutive_threshold':
-    values.monitor_setting.channel_error_consecutive_threshold,
-  'monitor_setting.channel_error_status_codes': parseHttpStatusCodeRules(
-    values.monitor_setting.channel_error_status_codes
-  ).normalized,
-  'monitor_setting.channel_error_keywords': normalizeLineEndings(
-    values.monitor_setting.channel_error_keywords
-  ),
 })
 
 export function RoutingReliabilitySection({
@@ -352,9 +281,6 @@ export function RoutingReliabilitySection({
 
   const autoDisableStatusCodes = form.watch('AutomaticDisableStatusCodes')
   const autoRetryStatusCodes = form.watch('AutomaticRetryStatusCodes')
-  const channelErrorStatusCodes = form.watch(
-    'monitor_setting.channel_error_status_codes'
-  )
   const channelTestMode = form.watch('monitor_setting.channel_test_mode')
   let channelTestModeDescription: string
   switch (channelTestMode) {
@@ -380,10 +306,6 @@ export function RoutingReliabilitySection({
   const autoRetryParsed = useMemo(
     () => parseHttpStatusCodeRules(autoRetryStatusCodes),
     [autoRetryStatusCodes]
-  )
-  const channelErrorParsed = useMemo(
-    () => parseHttpStatusCodeRules(channelErrorStatusCodes),
-    [channelErrorStatusCodes]
   )
 
   const onSubmit = async (values: RoutingReliabilityFormValues) => {
@@ -620,9 +542,7 @@ export function RoutingReliabilitySection({
                     <SettingsSwitchContent>
                       <FormLabel>{t('Re-enable on success')}</FormLabel>
                       <FormDescription>
-                        {t(
-                          'Bring channels back online after successful checks'
-                        )}
+                        {t('Bring channels back online after successful checks')}
                       </FormDescription>
                     </SettingsSwitchContent>
                     <FormControl>
@@ -744,143 +664,6 @@ export function RoutingReliabilitySection({
                 )}
               />
 
-              <Separator className='col-span-full my-1' />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.channel_error_window_minutes'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Channel failure window (minutes)')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={1}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Matching errors are counted per channel within this rolling window.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.channel_error_threshold'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Channel failure count threshold')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={0}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Disable the channel when matching errors reach this count in the window; 0 disables this trigger.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.channel_error_consecutive_threshold'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {t('Consecutive matching error threshold')}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type='number'
-                        min={0}
-                        step={1}
-                        {...safeNumberFieldProps(field)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Disable the channel after this many consecutive matching errors; 0 disables this trigger.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.channel_error_status_codes'
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t('Channel failure status codes')}</FormLabel>
-                    <FormControl>
-                      <Input
-                        placeholder={t('e.g. 401, 403, 429, 500-599')}
-                        value={field.value}
-                        onChange={(event) => field.onChange(event.target.value)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'Accepts comma-separated status codes and inclusive ranges.'
-                      )}{' '}
-                      {channelErrorParsed.ok &&
-                        channelErrorParsed.normalized &&
-                        channelErrorParsed.normalized !==
-                          field.value.trim() && (
-                          <span className='text-muted-foreground'>
-                            {t('Normalized:')} {channelErrorParsed.normalized}
-                          </span>
-                        )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name='monitor_setting.channel_error_keywords'
-                render={({ field }) => (
-                  <FormItem className='lg:col-span-2'>
-                    <FormLabel>{t('Channel failure keywords')}</FormLabel>
-                    <FormControl>
-                      <Textarea
-                        rows={4}
-                        placeholder={t('one keyword per line')}
-                        {...field}
-                        onChange={(event) => field.onChange(event.target.value)}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      {t(
-                        'An error must match both the status code and one keyword to count. This separates upstream account pool exhaustion from a per-key quota rejection that shares the same status code. Leave one field empty to match on the other alone.'
-                      )}{' '}
-                      {t(
-                        'Matches feed the channel-level counters; individual keys are not disabled by this rule.'
-                      )}
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
             </div>
           </div>
         </SettingsForm>

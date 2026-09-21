@@ -78,6 +78,7 @@ import {
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
 import { ChannelRowActionsLayoutContext } from './channel-row-actions-context'
+import { ChannelModelBadge } from './channel-model-badge'
 import { useChannels } from './channels-provider'
 import { DataTableRowActions } from './data-table-row-actions'
 import { DataTableTagRowActions } from './data-table-tag-row-actions'
@@ -1035,15 +1036,20 @@ export function useChannelsColumns(
         cell: ({ row }) => {
           const models = row.getValue('models') as string
           const modelArray = parseModelsList(models)
+          const disabledModels = new Set(
+            (row.original as Channel).disabled_models ?? []
+          )
+          const visibleModels = [
+            ...modelArray,
+            ...[...disabledModels].filter((model) => !modelArray.includes(model)),
+          ]
           return (
             <BadgeListCell
-              items={modelArray.map((model) => (
-                <StatusBadge
+              items={visibleModels.map((model) => (
+                <ChannelModelBadge
                   key={model}
-                  label={model}
-                  autoColor={model}
-                  size='sm'
-                  className='font-mono'
+                  model={model}
+                  disabled={disabledModels.has(model)}
                 />
               ))}
             />

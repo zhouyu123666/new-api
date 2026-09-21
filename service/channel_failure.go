@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +11,12 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-const channelFailureKeyPrefix = "channel_disable_failure:v1"
+const channelFailureKeyPrefix = "channel_model_disable_failure:v2"
+
+type channelModelFailureKey struct {
+	channelID int
+	modelName string
+}
 
 type channelFailureState struct {
 	failureTimes     []time.Time
@@ -21,26 +25,18 @@ type channelFailureState struct {
 
 var channelFailureStates = struct {
 	sync.Mutex
-	values map[int]channelFailureState
-}{values: make(map[int]channelFailureState)}
+	values map[channelModelFailureKey]channelFailureState
+}{values: make(map[channelModelFailureKey]channelFailureState)}
 
-// IsChannelFailureMatch reports whether an error belongs to the aggregate
-// channel-failure rule. Matching is intentionally independent of the provider
-// so it works for Codex2API, Kiro-Go, and other upstream adapters.
-//
-// Status code and keyword are combined with AND when both are configured. An
-// upstream account pool that is exhausted reports both a pool-level status code
-// and a pool-level message, whereas a per-key quota rejection reuses the same
-// status code with a key-level message. Requiring both keeps a healthy channel
-// from being disabled because the gateway API key hit its own rate limit.
-// When only one side is configured that side decides alone, so a partially
-// filled configuration still takes effect instead of silently never matching.
-func IsChannelFailureMatch(err *types.NewAPIError) bool {
+// IsChannelModelFailureMatch reports whether an upstream status code belongs to
+// the per-channel, per-model circuit-breaker rule.
+func IsChannelModelFailureMatch(err *types.NewAPIError) bool {
 	if err == nil {
 		return false
 	}
 	setting := operation_setting.GetMonitorSetting()
-	if !common.AutomaticDisableChannelEnabled || (setting.ChannelErrorThreshold <= 0 && setting.ChannelErrorConsecutiveThreshold <= 0) {
+	if !setting.ChannelModelCircuitBreakerEnabled ||
+		(setting.ChannelErrorThreshold <= 0 && setting.ChannelErrorConsecutiveThreshold <= 0) {
 		return false
 	}
 
@@ -48,50 +44,21 @@ func IsChannelFailureMatch(err *types.NewAPIError) bool {
 	if parseErr != nil {
 		statusCodes = nil
 	}
-	keywords := channelFailureKeywords(setting.ChannelErrorKeywords)
-	if len(statusCodes) == 0 && len(keywords) == 0 {
+	if len(statusCodes) == 0 {
 		return false
 	}
-
-	if len(statusCodes) > 0 {
-		// Compare against the upstream status code: a channel status-code mapping
-		// may already have rewritten StatusCode, and the rule describes upstream
-		// behavior rather than what the client eventually sees.
-		if !operation_setting.MatchStatusCodeRanges(statusCodes, err.UpstreamStatusCode()) {
-			return false
-		}
-	}
-	if len(keywords) == 0 {
-		return true
-	}
-
-	lowerMessage := strings.ToLower(err.Error())
-	for _, keyword := range keywords {
-		if strings.Contains(lowerMessage, keyword) {
-			return true
-		}
-	}
-	return false
+	// Compare against the upstream status code: a channel status-code mapping
+	// may already have rewritten StatusCode, and the rule describes upstream
+	// behavior rather than what the client eventually sees.
+	return operation_setting.MatchStatusCodeRanges(statusCodes, err.UpstreamStatusCode())
 }
 
-// channelFailureKeywords splits the configured keyword list into lowercase
-// entries, dropping blank lines so an empty configuration is detectable.
-func channelFailureKeywords(configured string) []string {
-	lines := strings.Split(configured, "\n")
-	keywords := make([]string, 0, len(lines))
-	for _, keyword := range lines {
-		if keyword = strings.TrimSpace(strings.ToLower(keyword)); keyword != "" {
-			keywords = append(keywords, keyword)
-		}
-	}
-	return keywords
-}
-
-// RecordChannelFailure records one matching error for a channel and returns
-// true when either configured threshold has been reached.
-func RecordChannelFailure(channelID int) bool {
+// RecordChannelModelFailure records one matching error for a channel-model pair
+// and returns true when either configured threshold has been reached.
+func RecordChannelModelFailure(channelID int, modelName string) bool {
 	setting := operation_setting.GetMonitorSetting()
-	if channelID <= 0 || !common.AutomaticDisableChannelEnabled ||
+	if channelID <= 0 || modelName == "" || !setting.ChannelModelCircuitBreakerEnabled ||
+		operation_setting.IsChannelModelCircuitBreakerExcluded(channelID) ||
 		(setting.ChannelErrorThreshold <= 0 && setting.ChannelErrorConsecutiveThreshold <= 0) {
 		return false
 	}
@@ -101,99 +68,189 @@ func RecordChannelFailure(channelID int) bool {
 	}
 
 	if common.RedisEnabled && common.RDB != nil {
-		reached, err := recordRedisChannelFailure(channelID, window, setting.ChannelErrorThreshold, setting.ChannelErrorConsecutiveThreshold)
+		reached, err := recordRedisChannelModelFailure(channelID, modelName, window, setting.ChannelErrorThreshold, setting.ChannelErrorConsecutiveThreshold)
 		if err == nil {
 			return reached
 		}
-		common.SysLog(fmt.Sprintf("failed to record channel failure in Redis: channel_id=%d, error=%v", channelID, err))
+		common.SysLog(fmt.Sprintf("failed to record channel model failure in Redis: channel_id=%d, model=%s, error=%v", channelID, modelName, err))
 	}
 
-	return recordMemoryChannelFailure(channelID, window, setting.ChannelErrorThreshold, setting.ChannelErrorConsecutiveThreshold)
+	return recordMemoryChannelModelFailure(channelID, modelName, window, setting.ChannelErrorThreshold, setting.ChannelErrorConsecutiveThreshold)
 }
 
-// ResetChannelFailureConsecutive breaks the consecutive-failure sequence while
-// retaining the rolling-window count.
-func ResetChannelFailureConsecutive(channelID int) {
-	if channelID <= 0 {
+// ResetChannelModelFailureConsecutive breaks the consecutive-failure sequence
+// while retaining the rolling-window count.
+func ResetChannelModelFailureConsecutive(channelID int, modelName string) {
+	if channelID <= 0 || modelName == "" {
 		return
 	}
 	if common.RedisEnabled && common.RDB != nil {
-		if err := common.RedisDel(redisChannelFailureKey(channelID, "consecutive")); err != nil {
-			common.SysLog(fmt.Sprintf("failed to reset channel failure sequence in Redis: channel_id=%d, error=%v", channelID, err))
+		if err := common.RedisDel(redisChannelModelFailureKey(channelID, modelName, "consecutive")); err != nil {
+			common.SysLog(fmt.Sprintf("failed to reset channel model failure sequence in Redis: channel_id=%d, model=%s, error=%v", channelID, modelName, err))
 		}
 	}
 
+	key := channelModelFailureKey{channelID: channelID, modelName: modelName}
 	channelFailureStates.Lock()
-	if state, ok := channelFailureStates.values[channelID]; ok {
+	if state, ok := channelFailureStates.values[key]; ok {
 		state.consecutiveCount = 0
-		channelFailureStates.values[channelID] = state
+		channelFailureStates.values[key] = state
 	}
 	channelFailureStates.Unlock()
 }
 
-// ClearChannelFailureCounters clears both counters after a successful health
-// probe or after a channel has been disabled, preventing stale failures from
-// affecting a later recovery cycle.
-func ClearChannelFailureCounters(channelID int) {
-	if channelID <= 0 {
-		return
+func ClearChannelModelFailureCountersByChannelIDs(channelIDs []int) error {
+	if len(channelIDs) == 0 {
+		return nil
+	}
+	excluded := make(map[int]struct{}, len(channelIDs))
+	for _, channelID := range channelIDs {
+		excluded[channelID] = struct{}{}
 	}
 	channelFailureStates.Lock()
-	delete(channelFailureStates.values, channelID)
+	for key := range channelFailureStates.values {
+		if _, ok := excluded[key.channelID]; ok {
+			delete(channelFailureStates.values, key)
+		}
+	}
+	channelFailureStates.Unlock()
+
+	if !common.RedisEnabled || common.RDB == nil {
+		return nil
+	}
+	ctx := context.Background()
+	for _, channelID := range channelIDs {
+		cursor := uint64(0)
+		pattern := fmt.Sprintf("%s:%d:*", channelFailureKeyPrefix, channelID)
+		for {
+			keys, nextCursor, err := common.RDB.Scan(ctx, cursor, pattern, 100).Result()
+			if err != nil {
+				return err
+			}
+			if len(keys) > 0 {
+				if err := common.RDB.Del(ctx, keys...).Err(); err != nil {
+					return err
+				}
+			}
+			cursor = nextCursor
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+	return nil
+}
+
+// ClearChannelModelFailureCounters clears both counters after the channel-model
+// pair has been disabled or recovered.
+func ClearChannelModelFailureCounters(channelID int, modelName string) {
+	if channelID <= 0 || modelName == "" {
+		return
+	}
+	key := channelModelFailureKey{channelID: channelID, modelName: modelName}
+	channelFailureStates.Lock()
+	delete(channelFailureStates.values, key)
 	channelFailureStates.Unlock()
 
 	if common.RedisEnabled && common.RDB != nil {
 		for _, kind := range []string{"window", "consecutive"} {
-			if err := common.RedisDel(redisChannelFailureKey(channelID, kind)); err != nil {
-				common.SysLog(fmt.Sprintf("failed to clear channel failure counter in Redis: channel_id=%d, kind=%s, error=%v", channelID, kind, err))
+			if err := common.RedisDel(redisChannelModelFailureKey(channelID, modelName, kind)); err != nil {
+				common.SysLog(fmt.Sprintf("failed to clear channel model failure counter in Redis: channel_id=%d, model=%s, kind=%s, error=%v", channelID, modelName, kind, err))
 			}
 		}
 	}
 }
 
-func redisChannelFailureKey(channelID int, kind string) string {
-	return fmt.Sprintf("%s:%d:%s", channelFailureKeyPrefix, channelID, kind)
+func ClearAllChannelModelFailureCounters() error {
+	channelFailureStates.Lock()
+	channelFailureStates.values = make(map[channelModelFailureKey]channelFailureState)
+	channelFailureStates.Unlock()
+
+	if !common.RedisEnabled || common.RDB == nil {
+		return nil
+	}
+	ctx := context.Background()
+	cursor := uint64(0)
+	for {
+		keys, nextCursor, err := common.RDB.Scan(ctx, cursor, channelFailureKeyPrefix+":*", 100).Result()
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			if err := common.RDB.Del(ctx, keys...).Err(); err != nil {
+				return err
+			}
+		}
+		cursor = nextCursor
+		if cursor == 0 {
+			return nil
+		}
+	}
 }
 
-func recordRedisChannelFailure(channelID int, window time.Duration, windowThreshold int, consecutiveThreshold int) (bool, error) {
+func redisChannelModelFailureKey(channelID int, modelName string, kind string) string {
+	return fmt.Sprintf("%s:%d:%s:%s", channelFailureKeyPrefix, channelID, common.Sha1([]byte(modelName)), kind)
+}
+
+func recordRedisChannelModelFailure(channelID int, modelName string, window time.Duration, windowThreshold int, consecutiveThreshold int) (bool, error) {
 	now := time.Now()
 	windowMilliseconds := window.Milliseconds()
-	windowCount, err := common.RDB.Eval(
-		context.Background(),
-		`redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+	windowCount := int64(0)
+	if windowThreshold > 0 {
+		count, err := common.RDB.Eval(
+			context.Background(),
+			`redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
 redis.call('PEXPIRE', KEYS[1], ARGV[4])
-return redis.call('ZCARD', KEYS[1])`,
-		[]string{redisChannelFailureKey(channelID, "window")},
-		now.Add(-window).UnixMilli(),
-		now.UnixMilli(),
-		fmt.Sprintf("%d-%s", now.UnixNano(), common.GetRandomString(8)),
-		windowMilliseconds,
-	).Int64()
-	if err != nil {
-		return false, err
+local count = redis.call('ZCARD', KEYS[1])
+local limit = tonumber(ARGV[5])
+if count > limit then
+  redis.call('ZREMRANGEBYRANK', KEYS[1], 0, count - limit - 1)
+  count = limit
+end
+return count`,
+			[]string{redisChannelModelFailureKey(channelID, modelName, "window")},
+			now.Add(-window).UnixMilli(),
+			now.UnixMilli(),
+			fmt.Sprintf("%d-%s", now.UnixNano(), common.GetRandomString(8)),
+			windowMilliseconds,
+			windowThreshold,
+		).Int64()
+		if err != nil {
+			return false, err
+		}
+		windowCount = count
 	}
-	consecutiveCount, err := common.RDB.Eval(
-		context.Background(),
-		`local count = redis.call('INCR', KEYS[1])
+	consecutiveCount := int64(0)
+	if consecutiveThreshold > 0 {
+		count, err := common.RDB.Eval(
+			context.Background(),
+			`local count = tonumber(redis.call('GET', KEYS[1]) or '0')
+if tonumber(ARGV[2]) <= 0 or count < tonumber(ARGV[2]) then
+  count = redis.call('INCR', KEYS[1])
+end
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 return count`,
-		[]string{redisChannelFailureKey(channelID, "consecutive")},
-		windowMilliseconds,
-	).Int64()
-	if err != nil {
-		return false, err
+			[]string{redisChannelModelFailureKey(channelID, modelName, "consecutive")},
+			windowMilliseconds,
+			consecutiveThreshold,
+		).Int64()
+		if err != nil {
+			return false, err
+		}
+		consecutiveCount = count
 	}
 	return (windowThreshold > 0 && windowCount >= int64(windowThreshold)) ||
 		(consecutiveThreshold > 0 && consecutiveCount >= int64(consecutiveThreshold)), nil
 }
 
-func recordMemoryChannelFailure(channelID int, window time.Duration, windowThreshold int, consecutiveThreshold int) bool {
+func recordMemoryChannelModelFailure(channelID int, modelName string, window time.Duration, windowThreshold int, consecutiveThreshold int) bool {
 	now := time.Now()
 	channelFailureStates.Lock()
 	defer channelFailureStates.Unlock()
 
-	state := channelFailureStates.values[channelID]
+	key := channelModelFailureKey{channelID: channelID, modelName: modelName}
+	state := channelFailureStates.values[key]
 	cutoff := now.Add(-window)
 	firstRetained := 0
 	for firstRetained < len(state.failureTimes) && !state.failureTimes[firstRetained].After(cutoff) {
@@ -201,11 +258,19 @@ func recordMemoryChannelFailure(channelID int, window time.Duration, windowThres
 	}
 	if firstRetained > 0 {
 		state.failureTimes = append([]time.Time(nil), state.failureTimes[firstRetained:]...)
+		if len(state.failureTimes) == 0 {
+			state.consecutiveCount = 0
+		}
 	}
 	state.failureTimes = append(state.failureTimes, now)
-	state.consecutiveCount++
+	if windowThreshold > 0 && len(state.failureTimes) > windowThreshold {
+		state.failureTimes = state.failureTimes[len(state.failureTimes)-windowThreshold:]
+	}
+	if consecutiveThreshold <= 0 || state.consecutiveCount < consecutiveThreshold {
+		state.consecutiveCount++
+	}
 	reached := (windowThreshold > 0 && len(state.failureTimes) >= windowThreshold) ||
 		(consecutiveThreshold > 0 && state.consecutiveCount >= consecutiveThreshold)
-	channelFailureStates.values[channelID] = state
+	channelFailureStates.values[key] = state
 	return reached
 }

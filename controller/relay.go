@@ -229,7 +229,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
-			service.ResetChannelFailureConsecutive(channel.Id)
+			service.ResetChannelModelFailureConsecutive(channel.Id, relayInfo.OriginModelName)
 			relayInfo.LastError = nil
 			return
 		}
@@ -365,26 +365,32 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.Error())))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
 	// do not use context to get channel info, there may be inconsistent channel info when processing asynchronously
-	usingKey := channelError.UsingKey
-	shouldDisable := service.ShouldDisableChannel(err)
-	thresholdReached := false
-	if channelError.AutoBan && service.IsChannelFailureMatch(err) {
-		thresholdReached = service.RecordChannelFailure(channelError.ChannelId)
-		// Matching aggregate errors use the channel-level threshold instead of
-		// immediately disabling only the selected multi-key account.
-		shouldDisable = thresholdReached
-		if thresholdReached {
-			// Aggregate failures indicate that the channel's upstream account pool
-			// is unavailable. Disable the whole channel instead of only the key
-			// selected for this request.
-			usingKey = ""
+	modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if operation_setting.IsChannelModelCircuitBreakerEnabled() &&
+		!operation_setting.IsChannelModelCircuitBreakerExcluded(channelError.ChannelId) &&
+		channelError.AutoBan && modelName != "" && !types.IsChannelError(err) {
+		if model.IsChannelModelDisabled(channelError.ChannelId, modelName) {
+			return
 		}
-	} else {
-		service.ResetChannelFailureConsecutive(channelError.ChannelId)
+		if service.IsChannelModelFailureMatch(err) {
+			if service.RecordChannelModelFailure(channelError.ChannelId, modelName) {
+				gopool.Go(func() {
+					service.DisableChannelModel(channelError.ChannelId, modelName, channelError.ChannelName, err.ErrorWithStatusCode(), err.UpstreamStatusCode(), channelError.AutoBan)
+				})
+			}
+			return
+		}
+		service.ResetChannelModelFailureConsecutive(channelError.ChannelId, modelName)
+		if service.ShouldDisableChannel(err) {
+			gopool.Go(func() {
+				service.DisableChannelModel(channelError.ChannelId, modelName, channelError.ChannelName, err.ErrorWithStatusCode(), err.UpstreamStatusCode(), channelError.AutoBan)
+			})
+		}
+		return
 	}
-	if shouldDisable && channelError.AutoBan {
+	service.ResetChannelModelFailureConsecutive(channelError.ChannelId, modelName)
+	if service.ShouldDisableChannel(err) && channelError.AutoBan {
 		gopool.Go(func() {
-			channelError.UsingKey = usingKey
 			service.DisableChannel(channelError, err.ErrorWithStatusCode())
 		})
 	}
@@ -599,7 +605,7 @@ func RelayTask(c *gin.Context) {
 	// ── 成功：结算 + 日志 + 插入任务 ──
 	if taskErr == nil {
 		if relayInfo.ChannelMeta != nil {
-			service.ResetChannelFailureConsecutive(relayInfo.ChannelMeta.ChannelId)
+			service.ResetChannelModelFailureConsecutive(relayInfo.ChannelMeta.ChannelId, relayInfo.OriginModelName)
 		}
 		if settleErr := service.SettleBilling(c, relayInfo, result.Quota); settleErr != nil {
 			common.SysError("settle task billing error: " + settleErr.Error())

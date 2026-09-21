@@ -144,6 +144,10 @@ func GetAllChannels(c *gin.Context) {
 				c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签渠道失败，请稍后重试"})
 				return
 			}
+			if err := model.AttachDisabledModels(tagChannels); err != nil {
+				common.ApiError(c, err)
+				return
+			}
 			channelData = append(channelData, tagChannels...)
 		}
 	} else {
@@ -161,6 +165,10 @@ func GetAllChannels(c *gin.Context) {
 		if err != nil {
 			common.SysError("failed to get channels: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道列表失败，请稍后重试"})
+			return
+		}
+		if err := model.AttachDisabledModels(channelData); err != nil {
+			common.ApiError(c, err)
 			return
 		}
 	}
@@ -304,6 +312,10 @@ func SearchChannels(c *gin.Context) {
 					})
 					return
 				}
+				if err := model.AttachDisabledModels(tagChannels); err != nil {
+					common.ApiError(c, err)
+					return
+				}
 				channelData = append(channelData, tagChannels...)
 			}
 		}
@@ -317,6 +329,10 @@ func SearchChannels(c *gin.Context) {
 			return
 		}
 		channelData = channels
+		if err := model.AttachDisabledModels(channelData); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 
 	if statusFilter == common.ChannelStatusEnabled || statusFilter == 0 {
@@ -406,6 +422,11 @@ func GetChannel(c *gin.Context) {
 		return
 	}
 	if channel != nil {
+		channel.DisabledModels, err = model.GetDisabledChannelModels(channel.Id)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		clearChannelInfo(channel)
 	}
 	c.JSON(http.StatusOK, gin.H{

@@ -21,6 +21,7 @@ import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment
 import type { ModelSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { ClaudeSettingsCard } from './claude-settings-card'
+import { ChannelModelCircuitBreakerSection } from './channel-model-circuit-breaker-section'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
@@ -98,6 +99,20 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.channel_test_concurrency'],
           'monitor_setting.channel_test_mode':
             settings['monitor_setting.channel_test_mode'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'channel-model-circuit-breaker',
+    titleKey: 'Channel-model circuit breaker',
+    build: (settings: ModelSettings) => (
+      <ChannelModelCircuitBreakerSection
+        defaultValues={{
+          'monitor_setting.channel_model_circuit_breaker_enabled':
+            settings['monitor_setting.channel_model_circuit_breaker_enabled'],
+          'monitor_setting.channel_model_excluded_channel_ids':
+            settings['monitor_setting.channel_model_excluded_channel_ids'],
           'monitor_setting.channel_error_window_minutes':
             settings['monitor_setting.channel_error_window_minutes'],
           'monitor_setting.channel_error_threshold':
@@ -106,8 +121,28 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.channel_error_consecutive_threshold'],
           'monitor_setting.channel_error_status_codes':
             settings['monitor_setting.channel_error_status_codes'],
-          'monitor_setting.channel_error_keywords':
-            settings['monitor_setting.channel_error_keywords'],
+          'monitor_setting.channel_model_recovery_enabled':
+            settings['monitor_setting.channel_model_recovery_enabled'],
+          'monitor_setting.channel_model_recovery_success_threshold':
+            settings['monitor_setting.channel_model_recovery_success_threshold'],
+          'monitor_setting.channel_model_recovery_delay_minutes':
+            settings['monitor_setting.channel_model_recovery_delay_minutes'],
+          'monitor_setting.channel_model_recovery_interval_minutes':
+            settings['monitor_setting.channel_model_recovery_interval_minutes'],
+          'monitor_setting.channel_model_recovery_concurrency':
+            settings['monitor_setting.channel_model_recovery_concurrency'],
+          'monitor_setting.channel_model_event_retention_days':
+            settings['monitor_setting.channel_model_event_retention_days'],
+          'monitor_setting.channel_model_wecom_bot_enabled':
+            settings['monitor_setting.channel_model_wecom_bot_enabled'],
+          'monitor_setting.channel_model_wecom_bot_url':
+            settings['monitor_setting.channel_model_wecom_bot_url'],
+          'monitor_setting.channel_model_wecom_bot_webhook_key_configured':
+            settings[
+              'monitor_setting.channel_model_wecom_bot_webhook_key_configured'
+            ],
+          'monitor_setting.channel_model_wecom_bot_contact':
+            settings['monitor_setting.channel_model_wecom_bot_contact'],
         }}
       />
     ),

@@ -29,6 +29,7 @@ import (
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -323,6 +324,14 @@ func InitResources() error {
 		}
 	}
 	model.InitOptionMap()
+	excludedChannelIDs, _, excludedErr := operation_setting.ParseChannelModelExcludedChannelIDs(
+		operation_setting.GetMonitorSetting().ChannelModelExcludedChannelIDs,
+	)
+	if excludedErr != nil {
+		common.SysError("invalid channel-model excluded channel IDs: " + excludedErr.Error())
+	} else if err := service.ResetExcludedChannelModelCircuitBreakerState(excludedChannelIDs, "channel excluded from circuit breaker"); err != nil {
+		common.SysError("failed to reset excluded channel-model state on startup: " + err.Error())
+	}
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
@@ -337,6 +346,11 @@ func InitResources() error {
 	err = common.InitRedisClient()
 	if err != nil {
 		return err
+	}
+	if excludedErr == nil {
+		if err := service.ClearChannelModelFailureCountersByChannelIDs(excludedChannelIDs); err != nil {
+			common.SysError("failed to clear excluded channel-model counters on startup: " + err.Error())
+		}
 	}
 
 	perfmetrics.Init()

@@ -15,7 +15,7 @@ func resetPricingEndpointTestTables(t *testing.T) {
 	t.Helper()
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
 	common.MemoryCacheEnabled = true
-	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &Model{}, &Vendor{}))
+	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &ChannelModelStatus{}, &Model{}, &Vendor{}))
 	for _, table := range []string{"abilities", "channels", "models", "vendors"} {
 		require.NoError(t, DB.Exec("DELETE FROM "+table).Error)
 	}

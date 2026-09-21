@@ -42,6 +42,43 @@ type testResult struct {
 	newAPIError *types.NewAPIError
 }
 
+func resolveChannelTestModel(channel *model.Channel, requestedModel string) string {
+	requestedModel = strings.TrimSpace(requestedModel)
+	if requestedModel != "" {
+		return requestedModel
+	}
+	if channel.TestModel != nil && strings.TrimSpace(*channel.TestModel) != "" {
+		return strings.TrimSpace(*channel.TestModel)
+	}
+	for _, modelName := range channel.GetModels() {
+		if modelName = strings.TrimSpace(modelName); modelName != "" {
+			return modelName
+		}
+	}
+	return "gpt-4o-mini"
+}
+
+func resolveChannelHealthTestModel(channel *model.Channel) string {
+	if channel.Status != common.ChannelStatusEnabled {
+		return resolveChannelTestModel(channel, "")
+	}
+	candidates := make([]string, 0, len(channel.GetModels())+1)
+	if channel.TestModel != nil {
+		candidates = append(candidates, *channel.TestModel)
+	}
+	candidates = append(candidates, channel.GetModels()...)
+	if len(candidates) == 0 {
+		candidates = append(candidates, "gpt-4o-mini")
+	}
+	for _, modelName := range candidates {
+		modelName = strings.TrimSpace(modelName)
+		if modelName != "" && !model.IsChannelModelDisabled(channel.Id, modelName) {
+			return modelName
+		}
+	}
+	return ""
+}
+
 func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
@@ -93,20 +130,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 
-	testModel = strings.TrimSpace(testModel)
-	if testModel == "" {
-		if channel.TestModel != nil && *channel.TestModel != "" {
-			testModel = strings.TrimSpace(*channel.TestModel)
-		} else {
-			models := channel.GetModels()
-			if len(models) > 0 {
-				testModel = strings.TrimSpace(models[0])
-			}
-			if testModel == "" {
-				testModel = "gpt-4o-mini"
-			}
-		}
-	}
+	testModel = resolveChannelTestModel(channel, testModel)
 
 	endpointType = normalizeChannelTestEndpoint(channel, endpointType)
 
@@ -912,11 +936,178 @@ type channelTestSummary struct {
 	Enabled   int `json:"enabled"`
 }
 
-func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
+type channelModelRecoverySummary struct {
+	Tested    int `json:"tested"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Recovered int `json:"recovered"`
+}
+
+func runChannelModelRecoveryTask(ctx context.Context, report func(processed, total int)) (channelModelRecoverySummary, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	setting := operation_setting.GetMonitorSetting()
+	now := common.GetTimestamp()
+	statuses := make([]model.ChannelModelStatus, 0)
+	if setting.ChannelModelCircuitBreakerEnabled && setting.ChannelModelRecoveryEnabled {
+		dueStatuses, err := model.GetDueChannelModelRecoveries(
+			now,
+			int64(setting.ChannelModelRecoveryDelayMinutes)*60,
+			int64(setting.ChannelModelRecoveryIntervalMinutes)*60,
+			1000,
+		)
+		if err != nil {
+			return channelModelRecoverySummary{}, err
+		}
+		statuses = dueStatuses
+	}
+	if report != nil {
+		report(0, len(statuses))
+	}
+	retentionDays := setting.ChannelModelEventRetentionDays
+	if retentionDays < 1 {
+		retentionDays = operation_setting.DefaultChannelModelEventRetentionDays
+	}
+	if _, cleanupErr := model.CleanupChannelModelEvents(common.GetTimestamp() - int64(retentionDays)*86400); cleanupErr != nil {
+		common.SysError("failed to clean up channel model events: " + cleanupErr.Error())
+	}
+	if len(statuses) == 0 {
+		return channelModelRecoverySummary{}, nil
+	}
+
+	channelIDs := make([]int, 0, len(statuses))
+	seenChannelIDs := make(map[int]bool)
+	for _, status := range statuses {
+		if !seenChannelIDs[status.ChannelId] {
+			seenChannelIDs[status.ChannelId] = true
+			channelIDs = append(channelIDs, status.ChannelId)
+		}
+	}
+	channels, err := model.GetChannelsByIds(channelIDs)
+	if err != nil {
+		return channelModelRecoverySummary{}, err
+	}
+	channelsByID := make(map[int]*model.Channel, len(channels))
+	for _, channel := range channels {
+		channelsByID[channel.Id] = channel
+	}
+	testUserID, err := resolveChannelTestUserID(nil)
+	if err != nil {
+		return channelModelRecoverySummary{}, err
+	}
+
+	workerCount := min(operation_setting.NormalizeChannelModelRecoveryConcurrency(setting.ChannelModelRecoveryConcurrency), len(statuses))
+	jobs := make(chan model.ChannelModelStatus)
+	results := make(chan channelModelRecoverySummary)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for status := range jobs {
+				resultSummary := channelModelRecoverySummary{}
+				channel := channelsByID[status.ChannelId]
+				if channel == nil || channel.Status != common.ChannelStatusEnabled || ctx.Err() != nil {
+					results <- resultSummary
+					continue
+				}
+
+				probe := testChannel(ctx, channel, testUserID, status.Model, "", shouldUseStreamForAutomaticChannelTest(channel))
+				if ctx.Err() != nil {
+					results <- resultSummary
+					continue
+				}
+				resultSummary.Tested = 1
+				probeSucceeded := probe.localErr == nil && probe.newAPIError == nil
+				successCount, exists, recordErr := model.RecordChannelModelRecoveryProbe(
+					status.ChannelId,
+					status.Model,
+					probeSucceeded,
+					common.GetTimestamp(),
+				)
+				if recordErr != nil {
+					common.SysError(fmt.Sprintf("failed to record channel model recovery probe: channel_id=%d model=%s error=%v", status.ChannelId, status.Model, recordErr))
+					resultSummary.Failed = 1
+					results <- resultSummary
+					continue
+				}
+				if !exists {
+					results <- resultSummary
+					continue
+				}
+
+				event := model.ChannelModelEvent{
+					ChannelId: status.ChannelId, ChannelName: channel.Name, Model: status.Model, SuccessCount: successCount,
+				}
+				if probeSucceeded {
+					event.Event = model.ChannelModelEventProbeSuccess
+					resultSummary.Succeeded = 1
+				} else {
+					event.Event = model.ChannelModelEventProbeFailed
+					resultSummary.Failed = 1
+					if probe.newAPIError != nil {
+						event.StatusCode = probe.newAPIError.UpstreamStatusCode()
+						event.Reason = probe.newAPIError.ErrorWithStatusCode()
+					} else if probe.localErr != nil {
+						event.Reason = probe.localErr.Error()
+					}
+				}
+				if eventErr := model.RecordChannelModelEvent(&event); eventErr != nil {
+					common.SysError("failed to record channel model probe event: " + eventErr.Error())
+				}
+				if probeSucceeded && successCount >= setting.ChannelModelRecoverySuccessThreshold {
+					service.EnableChannelModel(status.ChannelId, status.Model, channel.Name, successCount)
+					resultSummary.Recovered = 1
+				}
+				results <- resultSummary
+			}
+		}()
+	}
+	go func() {
+		defer close(jobs)
+		for _, status := range statuses {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- status:
+			}
+		}
+	}()
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	summary := channelModelRecoverySummary{}
+	processed := 0
+	for result := range results {
+		summary.Tested += result.Tested
+		summary.Succeeded += result.Succeeded
+		summary.Failed += result.Failed
+		summary.Recovered += result.Recovered
+		processed++
+		if report != nil && ctx.Err() == nil {
+			report(processed, len(statuses))
+		}
+	}
+	return summary, nil
+}
+
+func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64, requestedModel ...string) channelTestSummary {
 	summary := channelTestSummary{}
 	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
+	testModel := ""
+	if len(requestedModel) > 0 {
+		testModel = requestedModel[0]
+	} else {
+		testModel = resolveChannelHealthTestModel(channel)
+	}
+	if testModel == "" {
+		return summary
+	}
 	tik := time.Now()
-	result := testChannel(ctx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+	result := testChannel(ctx, channel, testUserID, testModel, "", shouldUseStreamForAutomaticChannelTest(channel))
 	milliseconds := time.Since(tik).Milliseconds()
 	if ctx.Err() != nil {
 		return summary
@@ -926,16 +1117,15 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 
 	shouldBanChannel := false
 	newAPIError := result.newAPIError
-	channelFailureThresholdReached := false
+	channelModelFailureThresholdReached := false
 	if newAPIError != nil {
 		shouldBanChannel = service.ShouldDisableChannel(newAPIError)
-		if channel.GetAutoBan() && service.IsChannelFailureMatch(newAPIError) {
-			channelFailureThresholdReached = service.RecordChannelFailure(channel.Id)
-			// Matching aggregate errors use the channel-level threshold instead of
-			// immediately disabling only the selected multi-key account.
-			shouldBanChannel = channelFailureThresholdReached
+		if !operation_setting.IsChannelModelCircuitBreakerExcluded(channel.Id) &&
+			channel.GetAutoBan() && service.IsChannelModelFailureMatch(newAPIError) {
+			channelModelFailureThresholdReached = service.RecordChannelModelFailure(channel.Id, testModel)
+			shouldBanChannel = false
 		} else {
-			service.ResetChannelFailureConsecutive(channel.Id)
+			service.ResetChannelModelFailureConsecutive(channel.Id, testModel)
 		}
 	}
 
@@ -948,25 +1138,20 @@ func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, test
 	}
 
 	if newAPIError == nil {
-		service.ResetChannelFailureConsecutive(channel.Id)
+		service.ResetChannelModelFailureConsecutive(channel.Id, testModel)
 		summary.Succeeded++
 	} else {
 		summary.Failed++
 	}
 
-	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
+	if allowDisable && isChannelEnabled && channelModelFailureThresholdReached && channel.GetAutoBan() {
+		service.DisableChannelModel(channel.Id, testModel, channel.Name, newAPIError.ErrorWithStatusCode(), newAPIError.UpstreamStatusCode(), channel.GetAutoBan())
+		summary.Disabled++
+	} else if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
 		channelError := *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan())
-		if channelFailureThresholdReached {
-			// The aggregate counter was already incremented above. Disable the
-			// whole channel without marking the selected multi-key account alone.
-			channelError.UsingKey = ""
-			service.DisableChannel(channelError, newAPIError.ErrorWithStatusCode())
-		} else {
-			processChannelError(result.context, channelError, newAPIError)
-		}
+		processChannelError(result.context, channelError, newAPIError)
 		summary.Disabled++
 	}
-
 	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
 		usingKey := common.GetContextKeyString(result.context, constant.ContextKeyChannelKey)
 		if channel.ChannelInfo.IsMultiKey {

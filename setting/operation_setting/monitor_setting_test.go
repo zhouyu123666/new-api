@@ -89,3 +89,28 @@ func TestValidateChannelTestConcurrency(t *testing.T) {
 	assert.Error(t, ValidateChannelTestConcurrency("33"))
 	assert.Error(t, ValidateChannelTestConcurrency("1.5"))
 }
+
+func TestChannelModelCircuitBreakerSettingIsReadable(t *testing.T) {
+	original := monitorSetting
+	t.Cleanup(func() { monitorSetting = original })
+	monitorSetting.ChannelModelCircuitBreakerEnabled = true
+
+	assert.True(t, IsChannelModelCircuitBreakerEnabled())
+}
+
+func TestChannelModelCircuitBreakerDefaultsAreOptIn(t *testing.T) {
+	assert.False(t, DefaultChannelModelCircuitBreakerEnabled)
+	assert.False(t, DefaultChannelModelRecoveryEnabled)
+}
+
+func TestParseChannelModelExcludedChannelIDsNormalizesAndRejectsInvalidValues(t *testing.T) {
+	ids, normalized, err := ParseChannelModelExcludedChannelIDs("10，2;10, 3")
+	require.NoError(t, err)
+	assert.Equal(t, []int{2, 3, 10}, ids)
+	assert.Equal(t, "2,3,10", normalized)
+
+	_, _, err = ParseChannelModelExcludedChannelIDs("1,invalid")
+	assert.Error(t, err)
+	_, _, err = ParseChannelModelExcludedChannelIDs("0")
+	assert.Error(t, err)
+}

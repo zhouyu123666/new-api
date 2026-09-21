@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -32,7 +33,7 @@ type AbilityWithChannel struct {
 
 func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
-	err := DB.Table("abilities").
+	err := excludeDisabledChannelModels(DB.Table("abilities")).
 		Select("abilities.*, channels.type as channel_type").
 		Joins("left join channels on abilities.channel_id = channels.id").
 		Where("abilities.enabled = ?", true).
@@ -43,27 +44,45 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 func GetGroupEnabledModels(group string) []string {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	excludeDisabledChannelModels(DB.Table("abilities")).Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
 	return models
 }
 
 func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
+	excludeDisabledChannelModels(DB.Table("abilities")).Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
 	return models
 }
 
 func GetAllEnableAbilities() []Ability {
 	var abilities []Ability
-	DB.Find(&abilities, "enabled = ?", true)
+	excludeDisabledChannelModels(DB.Model(&Ability{})).Find(&abilities, "enabled = ?", true)
 	return abilities
+}
+
+func excludeDisabledChannelModels(query *gorm.DB, requestedModels ...string) *gorm.DB {
+	if !operation_setting.IsChannelModelCircuitBreakerEnabled() {
+		return query
+	}
+	disabledModel := DB.Model(&ChannelModelStatus{}).Select("1").
+		Where("channel_model_statuses.channel_id = abilities.channel_id")
+	if len(requestedModels) > 0 {
+		disabledModel = disabledModel.Where("channel_model_statuses.model = ?", requestedModels[0])
+	} else {
+		disabledModel = disabledModel.Where("channel_model_statuses.model = abilities.model")
+	}
+	excluded, _, err := operation_setting.ParseChannelModelExcludedChannelIDs(operation_setting.GetMonitorSetting().ChannelModelExcludedChannelIDs)
+	if err == nil && len(excluded) > 0 {
+		return query.Where("abilities.channel_id IN ? OR NOT EXISTS (?)", excluded, disabledModel)
+	}
+	return query.Where("NOT EXISTS (?)", disabledModel)
 }
 
 func getPriority(group string, model string, retry int) (int, error) {
 
 	var priorities []int
-	err := DB.Model(&Ability{}).
+	err := excludeDisabledChannelModels(DB.Model(&Ability{}), model).
 		Select("DISTINCT(priority)").
 		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
 		Order("priority DESC").              // 按优先级降序排序
@@ -91,14 +110,17 @@ func getPriority(group string, model string, retry int) (int, error) {
 }
 
 func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
-	maxPrioritySubQuery := DB.Model(&Ability{}).Select("MAX(priority)").Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
-	channelQuery := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
+	maxPrioritySubQuery := excludeDisabledChannelModels(DB.Model(&Ability{}).Select("MAX(priority)"), model).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true)
+	channelQuery := excludeDisabledChannelModels(DB.Model(&Ability{}), model).
+		Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = (?)", group, model, true, maxPrioritySubQuery)
 	if retry != 0 {
 		priority, err := getPriority(group, model, retry)
 		if err != nil {
 			return nil, err
 		} else {
-			channelQuery = DB.Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
+			channelQuery = excludeDisabledChannelModels(DB.Model(&Ability{}), model).
+				Where(commonGroupCol+" = ? and model = ? and enabled = ? and priority = ?", group, model, true, priority)
 		}
 	}
 
@@ -304,7 +326,10 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 
 	// 如果是新创建的事务，需要提交
 	if isNewTx {
-		return tx.Commit().Error
+		if err := tx.Commit().Error; err != nil {
+			return err
+		}
+		return PruneChannelModelStatuses(channel.Id, channel.GetModels())
 	}
 
 	return nil
