@@ -40,10 +40,5 @@ export {
   flowSankeyDatumValue,
   getFlowStages,
 } from './flow'
-export {
-  buildModelMetrics,
-  calculateDashboardStats,
-  getDashboardDurationMinutes,
-  safeDivide,
-} from './stats'
+export { safeDivide, calculateDashboardStats } from './stats'
 export { getPreviewText } from './text'

@@ -27,7 +27,6 @@ import {
   buildQueryParams,
   calculateDashboardStats,
   getDefaultDays,
-  getDashboardDurationMinutes,
 } from '@/features/dashboard/lib'
 import type {
   QuotaDataItem,
@@ -89,7 +88,8 @@ export function LogStatCards(props: LogStatCardsProps) {
       filters?.start_timestamp,
       filters?.end_timestamp
     )
-    setTimeRangeMinutes(getDashboardDurationMinutes(filters))
+    const timeDiff = (timeRange.end_timestamp - timeRange.start_timestamp) / 60
+    setTimeRangeMinutes(timeDiff)
 
     void getUserQuotaDates(buildQueryParams(timeRange, filters), isAdmin)
       .then((res) => {

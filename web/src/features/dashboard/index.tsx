@@ -89,12 +89,6 @@ const LazyModelCharts = lazy(() =>
   }))
 )
 
-const LazyModelMetricsTable = lazy(() =>
-  import('./components/models/model-metrics-table').then((m) => ({
-    default: m.ModelMetricsTable,
-  }))
-)
-
 const LazyConsumptionDistributionChart = lazy(() =>
   import('./components/models/consumption-distribution-chart').then((m) => ({
     default: m.ConsumptionDistributionChart,
@@ -154,30 +148,6 @@ function ModelChartsFallback() {
       </div>
       <div className='h-96 p-2'>
         <Skeleton className='h-full w-full' />
-      </div>
-    </div>
-  )
-}
-
-function ModelMetricsFallback() {
-  return (
-    <div className='overflow-hidden rounded-lg border'>
-      <div className='flex items-center gap-2 border-b px-4 py-3 sm:px-5'>
-        <Skeleton className='size-7 rounded-md' />
-        <div className='space-y-1'>
-          <Skeleton className='h-4 w-32' />
-          <Skeleton className='h-3 w-48' />
-        </div>
-      </div>
-      <div className='space-y-3 p-4'>
-        {Array.from({ length: 4 }, (_, index) => (
-          <div key={index} className='flex items-center gap-4'>
-            <Skeleton className='h-4 flex-1' />
-            <Skeleton className='h-4 w-16' />
-            <Skeleton className='h-4 w-20' />
-            <Skeleton className='h-4 w-20' />
-          </div>
-        ))}
       </div>
     </div>
   )
@@ -347,34 +317,35 @@ export function Dashboard() {
     ) : null
   const sectionActions = modelActions ?? flowActions
 
+  if (activeSection === 'overview') {
+    return <OverviewDashboard />
+  }
+
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t(meta.titleKey)}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='space-y-3 sm:space-y-4'>
-          {activeSection !== 'overview' && (
-            <div className='flex flex-wrap items-center justify-between gap-1.5 sm:gap-2'>
-              {showSectionTabs ? (
-                <Tabs value={activeSection} onValueChange={handleSectionChange}>
-                  <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
-                    {visibleSections.map((section) => (
-                      <TabsTrigger key={section} value={section}>
-                        {t(SECTION_META[section].titleKey)}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                </Tabs>
-              ) : (
-                <div />
-              )}
-              {sectionActions != null && (
-                <div className='flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2'>
-                  {sectionActions}
-                </div>
-              )}
-            </div>
-          )}
-          {activeSection === 'overview' && <OverviewDashboard />}
+          <div className='flex flex-wrap items-center justify-between gap-1.5 sm:gap-2'>
+            {showSectionTabs ? (
+              <Tabs value={activeSection} onValueChange={handleSectionChange}>
+                <TabsList className='max-w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto'>
+                  {visibleSections.map((section) => (
+                    <TabsTrigger key={section} value={section}>
+                      {t(SECTION_META[section].titleKey)}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            ) : (
+              <div />
+            )}
+            {sectionActions != null && (
+              <div className='flex shrink-0 flex-wrap items-center gap-1.5 sm:gap-2'>
+                {sectionActions}
+              </div>
+            )}
+          </div>
           {activeSection === 'models' && (
             <>
               <FadeIn>
@@ -385,23 +356,14 @@ export function Dashboard() {
                   />
                 </Suspense>
               </FadeIn>
-              <FadeIn delay={0.05}>
-                <Suspense fallback={<ModelMetricsFallback />}>
-                  <LazyModelMetricsTable
-                    data={modelData}
-                    filters={modelFilters}
-                    loading={dataLoading}
-                  />
-                </Suspense>
-              </FadeIn>
               {isAdmin && (
-                <FadeIn delay={0.1}>
+                <FadeIn delay={0.05}>
                   <Suspense fallback={<PerformanceOverviewFallback />}>
                     <LazyPerformanceOverview />
                   </Suspense>
                 </FadeIn>
               )}
-              <FadeIn delay={0.15}>
+              <FadeIn delay={0.1}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyConsumptionDistributionChart
                     data={modelData}
@@ -415,7 +377,7 @@ export function Dashboard() {
                   />
                 </Suspense>
               </FadeIn>
-              <FadeIn delay={0.2}>
+              <FadeIn delay={0.15}>
                 <Suspense fallback={<ModelChartsFallback />}>
                   <LazyModelCharts
                     data={modelData}

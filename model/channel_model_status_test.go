@@ -67,12 +67,12 @@ func TestChannelModelDisableOnlyRemovesMatchingRoute(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, changed)
 
-			selectedA, err := GetRandomSatisfiedChannel("default", "model-a", 0, "")
+			selectedA, err := GetRandomSatisfiedChannel("default", "model-a", 0, nil)
 			require.NoError(t, err)
 			require.NotNil(t, selectedA)
 			assert.Equal(t, 2, selectedA.Id)
 
-			selectedB, err := GetRandomSatisfiedChannel("default", "model-b", 0, "")
+			selectedB, err := GetRandomSatisfiedChannel("default", "model-b", 0, nil)
 			require.NoError(t, err)
 			require.NotNil(t, selectedB)
 			assert.Equal(t, 1, selectedB.Id)
@@ -80,7 +80,7 @@ func TestChannelModelDisableOnlyRemovesMatchingRoute(t *testing.T) {
 			changed, err = EnableChannelModel(1, "model-a")
 			require.NoError(t, err)
 			require.True(t, changed)
-			restored, err := GetRandomSatisfiedChannel("default", "model-a", 0, "")
+			restored, err := GetRandomSatisfiedChannel("default", "model-a", 0, nil)
 			require.NoError(t, err)
 			require.NotNil(t, restored)
 			assert.Equal(t, 1, restored.Id)
@@ -217,7 +217,7 @@ func TestExcludedChannelIgnoresExistingCircuitBreakerInEveryRoutingMode(t *testi
 				InitChannelCache()
 			}
 
-			selected, err := GetRandomSatisfiedChannel("default", "model-a", 0, "")
+			selected, err := GetRandomSatisfiedChannel("default", "model-a", 0, nil)
 			require.NoError(t, err)
 			require.NotNil(t, selected)
 			assert.Equal(t, 1, selected.Id)
