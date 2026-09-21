@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -25,6 +27,15 @@ import (
 )
 
 const maxTaskPluginSourceBytes = 1024 * 1024
+
+func taskPluginCompileError(c *gin.Context, err error) {
+	var unknownField *jsplugin.UnknownMetaFieldError
+	if errors.As(err, &unknownField) {
+		common.ApiErrorI18n(c, i18n.MsgTaskPluginUnknownMetaField, map[string]any{"Field": unknownField.Field})
+		return
+	}
+	common.ApiError(c, err)
+}
 
 type taskPluginUploadRequest struct {
 	Source       string `json:"source" binding:"required"`
@@ -57,7 +68,7 @@ func UploadTaskPlugin(c *gin.Context) {
 	temporary := jsplugin.NewRegistry()
 	loaded, err := temporary.Register(request.Source, jsplugin.Options{})
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		taskPluginCompileError(c, err)
 		return
 	}
 	if err = jsplugin.ValidateV1Meta(loaded.Meta); err != nil {
@@ -335,7 +346,7 @@ func GetTaskPlugin(c *gin.Context) {
 	if err == nil {
 		loaded, compileErr := jsplugin.NewRegistry().Register(plugin.Source, jsplugin.Options{Key: plugin.Key, Version: plugin.Version})
 		if compileErr != nil {
-			common.ApiErrorMsg(c, compileErr.Error())
+			taskPluginCompileError(c, compileErr)
 			return
 		}
 		common.ApiSuccess(c, taskPluginDetail{Plugin: plugin, Meta: loaded.Meta, Source: plugin.Source, Layer: "override", HasIcon: plugin.HasIcon()})
@@ -352,7 +363,7 @@ func GetTaskPlugin(c *gin.Context) {
 	}
 	loaded, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: key})
 	if err != nil {
-		common.ApiError(c, err)
+		taskPluginCompileError(c, err)
 		return
 	}
 	_, _, hasIcon := plugins.Icon(key)
@@ -384,7 +395,7 @@ func DryRunTaskPlugin(c *gin.Context) {
 	}
 	loaded, err := jsplugin.NewRegistry().Register(detailSource, jsplugin.Options{Key: c.Param("key")})
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		taskPluginCompileError(c, err)
 		return
 	}
 	args := make([]any, len(request.Args))
@@ -473,7 +484,7 @@ func ActivateTaskPlugin(c *gin.Context) {
 		return
 	}
 	if _, err = jsplugin.NewRegistry().Register(target.Source, jsplugin.Options{Key: target.Key, Version: target.Version}); err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		taskPluginCompileError(c, err)
 		return
 	}
 	if err = model.ActivateTaskPlugin(target.Key, target.Version); err != nil {
@@ -499,6 +510,7 @@ func SetTaskPluginStatus(c *gin.Context) {
 	}
 	key := c.Param("key")
 	disabledChannels := 0
+	unboundChannels := 0
 	if !*request.Enabled {
 		channels, inFlight, usageErr := model.GetTaskPluginUsage(key)
 		if usageErr != nil {
@@ -513,9 +525,25 @@ func SetTaskPluginStatus(c *gin.Context) {
 		}
 		if cascade {
 			for _, channel := range channels {
+				if channel.Type == constant.ChannelTypeNewAPI {
+					// A gateway channel also carries ordinary traffic, so the
+					// cascade only drops this plugin from its bindings.
+					unbound, unbindErr := model.UnbindTaskPlugin(channel.Id, key)
+					if unbindErr != nil {
+						common.ApiError(c, unbindErr)
+						return
+					}
+					if unbound {
+						unboundChannels++
+					}
+					continue
+				}
 				if model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "task plugin disabled") {
 					disabledChannels++
 				}
+			}
+			if unboundChannels > 0 {
+				model.InitChannelCache()
 			}
 		}
 	}
@@ -557,7 +585,7 @@ func SetTaskPluginStatus(c *gin.Context) {
 			return
 		}
 		if !hasActiveOverride {
-			common.ApiSuccess(c, gin.H{"plugin_enabled": *request.Enabled, "disabled_channels": disabledChannels})
+			common.ApiSuccess(c, gin.H{"plugin_enabled": *request.Enabled, "disabled_channels": disabledChannels, "unbound_channels": unboundChannels})
 			return
 		}
 	}
@@ -569,7 +597,7 @@ func SetTaskPluginStatus(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"plugin_enabled": *request.Enabled, "disabled_channels": disabledChannels})
+	common.ApiSuccess(c, gin.H{"plugin_enabled": *request.Enabled, "disabled_channels": disabledChannels, "unbound_channels": unboundChannels})
 }
 
 func taskPluginHasFactory(key string) bool {
@@ -649,15 +677,19 @@ func GetTaskPluginOptions(c *gin.Context) {
 				_, _, hasIcon = plugins.Icon(meta.Key)
 			}
 			options = append(options, gin.H{
-				"key":          meta.Key,
-				"name":         meta.Name,
-				"icon":         meta.Icon,
-				"hasIcon":      hasIcon,
-				"baseUrl":      meta.BaseURL,
-				"sortPriority": meta.SortPriority,
-				"website":      meta.Website,
-				"models":       meta.Models,
-				"usageSchema":  meta.UsageSchema,
+				"key":           meta.Key,
+				"name":          meta.Name,
+				"description":   meta.Description,
+				"icon":          meta.Icon,
+				"hasIcon":       hasIcon,
+				"baseUrl":       meta.BaseURL,
+				"sortPriority":  meta.SortPriority,
+				"website":       meta.Website,
+				"models":        meta.Models,
+				"channelTypes":  meta.ChannelTypes,
+				"upstreams":     meta.Upstreams,
+				"usageSchema":   meta.UsageSchema,
+				"usageProfiles": meta.UsageProfiles,
 			})
 		}
 	}

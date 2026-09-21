@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/plugins"
@@ -105,6 +106,9 @@ func TestDisableThirdPartyPluginSupportsCascadeAndForce(t *testing.T) {
 	setting := `{"task_plugin_key":"lifecycle-only"}`
 	channel := model.Channel{Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Name: "linked", Models: "doc", Group: "default", BaseURL: &baseURL, Setting: &setting}
 	require.NoError(t, channel.Insert())
+	gatewaySetting := `{"task_extend_plugin_keys":["lifecycle-only","other"]}`
+	gateway := model.Channel{Type: constant.ChannelTypeNewAPI, Status: common.ChannelStatusEnabled, Name: "gateway", Models: "doc,gpt", Group: "default", BaseURL: &baseURL, Setting: &gatewaySetting}
+	require.NoError(t, gateway.Insert())
 	require.NoError(t, model.DB.Create(&model.Task{Platform: "lifecycle-only", Status: model.TaskStatusSubmitted}).Error)
 
 	recorder := httptest.NewRecorder()
@@ -115,9 +119,15 @@ func TestDisableThirdPartyPluginSupportsCascadeAndForce(t *testing.T) {
 	SetTaskPluginStatus(context)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	assert.Contains(t, recorder.Body.String(), `"disabled_channels":1`)
+	assert.Contains(t, recorder.Body.String(), `"unbound_channels":1`)
 	updated, err := model.GetChannelById(channel.Id, true)
 	require.NoError(t, err)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, updated.Status)
+	updatedGateway, err := model.GetChannelById(gateway.Id, true)
+	require.NoError(t, err)
+	assert.Equal(t, common.ChannelStatusEnabled, updatedGateway.Status, "a gateway channel keeps serving its other traffic")
+	assert.Equal(t, []string{"other"}, updatedGateway.GetSetting().TaskExtendPluginKeys, "only the disabled plugin is unbound")
 }
 
 // klingFactoryVersion returns the version declared in the embedded kling factory
@@ -358,15 +368,19 @@ func TestMasterSwitchEmptiesOptionsAndKeepsList(t *testing.T) {
 	assert.Equal(t, "kling", item.Meta.Key)
 }
 
-func TestGetTaskPluginOptionsIncludesUsageSchemaIconAndBaseURL(t *testing.T) {
+func TestGetTaskPluginOptionsIncludesDescriptionUsageSchemaIconBaseURLAndChannelTypes(t *testing.T) {
 	setupTaskPluginControllerTest(t)
 	const key = "usage-options-probe"
 	source := `
 export const meta = {
   apiVersion: 1, key: "usage-options-probe", name: "Usage Options", version: "1.0.0", author: {name: "Test"},
+  description: {en: "Video generation via the vendor API", zh: "通过厂商接口生成视频"},
   icon: "text:UO", baseUrl: "http://localhost:9000/",
+  channelTypes: [1990, 1991],
+  upstreams: ["vendor", "new_api"],
   models: ["usage-options-model"], fetchMode: "per_task",
-  usageSchema: {seconds: {type: "number", unit: "second", description: "Generated media duration."}}
+  usageSchema: {seconds: {type: "number", unit: "second", description: "Video generation unit price"}},
+  usageProfiles: [{models:["usage-options-model"],schema:{image_count:{type:"number",unit:"count"}}}]
 };
 export function buildSubmitRequest() { return {}; }
 export function parseSubmitResponse() { return {}; }
@@ -386,10 +400,14 @@ export function parseTaskResult() { return {}; }
 	var response struct {
 		Success bool `json:"success"`
 		Data    []struct {
-			Key         string                               `json:"key"`
-			Icon        string                               `json:"icon"`
-			BaseURL     string                               `json:"baseUrl"`
-			UsageSchema map[string]jsplugin.UsageFieldSchema `json:"usageSchema"`
+			Key           string                               `json:"key"`
+			Description   jsplugin.LocalizedText               `json:"description"`
+			Icon          string                               `json:"icon"`
+			BaseURL       string                               `json:"baseUrl"`
+			ChannelTypes  []int                                `json:"channelTypes"`
+			Upstreams     []string                             `json:"upstreams"`
+			UsageSchema   map[string]jsplugin.UsageFieldSchema `json:"usageSchema"`
+			UsageProfiles []jsplugin.UsageProfile              `json:"usageProfiles"`
 		} `json:"data"`
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -398,9 +416,15 @@ export function parseTaskResult() { return {}; }
 		if option.Key != key {
 			continue
 		}
+		assert.Equal(t, jsplugin.LocalizedText{"en": "Video generation via the vendor API", "zh": "通过厂商接口生成视频"}, option.Description)
 		assert.Equal(t, "second", option.UsageSchema["seconds"].Unit)
-		assert.Equal(t, "Generated media duration.", option.UsageSchema["seconds"].Description["en"])
+		assert.Equal(t, "Video generation unit price", option.UsageSchema["seconds"].Description["en"])
+		require.Len(t, option.UsageProfiles, 1)
+		assert.Equal(t, []string{"usage-options-model"}, option.UsageProfiles[0].Models)
+		assert.Equal(t, "count", option.UsageProfiles[0].Schema["image_count"].Unit)
 		assert.Equal(t, "text:UO", option.Icon)
+		assert.Equal(t, []int{1990, 1991}, option.ChannelTypes)
+		assert.Equal(t, []string{"vendor", "new_api"}, option.Upstreams, "the New API channel form lists only plugins declaring new_api")
 		assert.Equal(t, "http://localhost:9000", option.BaseURL, "the drawer prefills the normalized plugin default")
 		return
 	}
@@ -884,6 +908,39 @@ func TestUploadTaskPluginPreflightConflict(t *testing.T) {
 			var count int64
 			require.NoError(t, model.DB.Model(&model.TaskPlugin{}).Where("key = ?", testCase.key).Count(&count).Error)
 			assert.Zero(t, count)
+		})
+	}
+}
+
+func TestUploadTaskPluginLocalizesUnknownMetaField(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	body, err := common.Marshal(map[string]any{
+		"source": `export const meta = { futureField: true };`,
+	})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		language string
+		message  string
+	}{
+		{"en", `Plugin metadata contains an unknown field "futureField". If this plugin was downloaded from the official marketplace, it may require a newer version of new-api. Try updating new-api and installing the plugin again.`},
+		{"zh-CN", "插件元数据包含未知字段“futureField”。如果插件来自官方市场，可能需要更高版本的 new-api。请尝试更新 new-api 后重新安装插件。"},
+		{"zh-TW", "外掛中繼資料包含未知欄位「futureField」。如果外掛來自官方市集，可能需要較新版本的 new-api。請嘗試更新 new-api 後重新安裝外掛。"},
+	} {
+		t.Run(tc.language, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Header.Set("Accept-Language", tc.language)
+			UploadTaskPlugin(c)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var response struct {
+				Success bool   `json:"success"`
+				Message string `json:"message"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			assert.False(t, response.Success)
+			assert.Equal(t, tc.message, response.Message)
 		})
 	}
 }
