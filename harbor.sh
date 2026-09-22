@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 export HARBOR_HOST="registry.intsig.net"
 export HARBOR_PROJECT="noc_maas"
 export HARBOR_REPOSITORY="new-api"
@@ -9,9 +11,9 @@ export IMAGE="${HARBOR_HOST}/${HARBOR_PROJECT}/${HARBOR_REPOSITORY}:${IMAGE_TAG}
 
 echo "$IMAGE"
 
-read -rsp "Harbor password: " HARBOR_PASSWORD
-echo
+read -r -s -p "Harbor password: " HARBOR_PASSWORD
+printf '\n'
 printf '%s' "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" \
-  --username "robot$noc_maas_robot" \
+  --username 'robot$noc_maas_robot' \
   --password-stdin
 unset HARBOR_PASSWORD
