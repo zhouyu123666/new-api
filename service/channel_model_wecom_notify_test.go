@@ -71,6 +71,34 @@ func TestNotifyChannelModelWeComBotSendsExpectedTextPayload(t *testing.T) {
 	assert.Equal(t, "webhook-secret", received.WebhookKey)
 }
 
+func TestChannelModelWeComNotificationsIncludeSystemName(t *testing.T) {
+	setupChannelModelWeComBotTest(t)
+	previousSystemName := common.SystemName
+	common.SystemName = "测试站点"
+	t.Cleanup(func() { common.SystemName = previousSystemName })
+
+	contents := make([]string, 0, 2)
+	channelModelWeComBotHTTPClient = func() *http.Client {
+		return &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var payload channelModelWeComBotPayload
+			require.NoError(t, common.DecodeJson(req.Body, &payload))
+			contents = append(contents, payload.Content)
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{"errcode":0,"errmsg":"ok"}`)),
+				Header:     make(http.Header),
+			}, nil
+		})}
+	}
+
+	notifyChannelModelDisabledWeCom(7, "gpt-5.6-luna", "local", http.StatusBadGateway, "upstream failed")
+	notifyChannelModelRecoveredWeCom(7, "gpt-5.6-luna", "local", 2, "")
+
+	require.Len(t, contents, 2)
+	assert.Contains(t, contents[0], "[渠道模型熔断]\n站点：测试站点\n")
+	assert.Contains(t, contents[1], "[渠道模型恢复]\n站点：测试站点\n")
+}
+
 func TestNotifyChannelModelWeComBotLimitsEachKeyToTwentyPerRollingMinute(t *testing.T) {
 	setupChannelModelWeComBotTest(t)
 	sent := 0

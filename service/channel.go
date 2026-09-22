@@ -137,8 +137,8 @@ func ResetExcludedChannelModelCircuitBreakerState(channelIDs []int, reason strin
 
 func notifyChannelModelDisabledWeCom(channelID int, modelName string, channelName string, statusCode int, reason string) {
 	content := fmt.Sprintf(
-		"[渠道模型熔断]\n渠道：%s (#%d)\n模型：%s\n状态码：%d\n原因：%s\n时间：%s",
-		channelName, channelID, modelName, statusCode, common.LocalLogPreview(reason), time.Now().Format(time.DateTime),
+		"[渠道模型熔断]\n站点：%s\n渠道：%s (#%d)\n模型：%s\n状态码：%d\n原因：%s\n时间：%s",
+		common.SystemName, channelName, channelID, modelName, statusCode, common.LocalLogPreview(reason), time.Now().Format(time.DateTime),
 	)
 	if err := NotifyChannelModelWeComBot(content); err != nil {
 		common.SysError("failed to send channel model disabled WeCom notification: " + err.Error())
@@ -147,8 +147,8 @@ func notifyChannelModelDisabledWeCom(channelID int, modelName string, channelNam
 
 func notifyChannelModelRecoveredWeCom(channelID int, modelName string, channelName string, successCount int, reason string) {
 	content := fmt.Sprintf(
-		"[渠道模型恢复]\n渠道：%s (#%d)\n模型：%s\n连续成功次数：%d\n时间：%s",
-		channelName, channelID, modelName, successCount, time.Now().Format(time.DateTime),
+		"[渠道模型恢复]\n站点：%s\n渠道：%s (#%d)\n模型：%s\n连续成功次数：%d\n时间：%s",
+		common.SystemName, channelName, channelID, modelName, successCount, time.Now().Format(time.DateTime),
 	)
 	if reason != "" {
 		content += "\n原因：" + common.LocalLogPreview(reason)
