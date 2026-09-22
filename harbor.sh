@@ -17,3 +17,6 @@ printf '%s' "$HARBOR_PASSWORD" | docker login "$HARBOR_HOST" \
   --username 'robot$noc_maas_robot' \
   --password-stdin
 unset HARBOR_PASSWORD
+
+docker build --pull --progress=plain --tag "$IMAGE" .
+docker push "$IMAGE"
