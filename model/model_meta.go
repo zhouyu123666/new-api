@@ -413,7 +413,7 @@ type ModelConnection struct {
 
 func GetModelConnections() ([]ModelConnection, error) {
 	var connections []ModelConnection
-	err := DB.Table("abilities").
+	err := excludeDisabledChannelModels(DB.Table("abilities")).
 		Select("abilities.*, channels.type as channel_type, channels.name as channel_name").
 		Joins("JOIN channels ON abilities.channel_id = channels.id").
 		Where("abilities.enabled = ? AND channels.status = ?", true, common.ChannelStatusEnabled).
@@ -452,7 +452,7 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 	}
 	var rows []row
 
-	query := DB.Table("abilities").
+	query := excludeDisabledChannelModels(DB.Table("abilities")).
 		Select("abilities.model as model, channels.type as channel_type").
 		Joins("JOIN channels ON abilities.channel_id = channels.id").
 		Where("abilities.model IN ? AND abilities.enabled = ? AND channels.status = ?", modelNames, true, common.ChannelStatusEnabled).

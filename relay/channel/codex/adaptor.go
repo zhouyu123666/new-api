@@ -95,6 +95,15 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if len(request.Instructions) == 0 {
 		request.Instructions = json.RawMessage(`""`)
 	}
+	// Keep recording the incoming request's fast marker for usage analytics.
+	// Forward service_tier only when the global GPT policy allows it; otherwise
+	// remove it before the Codex request is sent.
+	if !relaycommon.ShouldForwardGPTServiceTier(info) {
+		request.ServiceTier = ""
+	} else {
+		request.ServiceTier = relaycommon.NormalizeGPTServiceTierValue(request.ServiceTier)
+	}
+	relaycommon.ApplyGPTReasoningPolicy(info, request.Reasoning)
 
 	if isCompact {
 		return request, nil

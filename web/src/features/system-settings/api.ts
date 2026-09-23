@@ -32,10 +32,22 @@ import type {
   UpdatePasskeyDomainsResponse,
   UpstreamChannelsResponse,
   UpstreamRatiosResponse,
+  ChannelModelEventsResponse,
+  ChannelModelEventQuery,
 } from './types'
 
 export async function getSystemOptions() {
   const res = await api.get<SystemOptionsResponse>('/api/option/')
+  return res.data
+}
+
+export async function getChannelModelEvents(
+  params: ChannelModelEventQuery
+): Promise<ChannelModelEventsResponse> {
+  const res = await api.get<ChannelModelEventsResponse>(
+    '/api/channel/model-events',
+    { params }
+  )
   return res.data
 }
 

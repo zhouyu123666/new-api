@@ -210,6 +210,12 @@ export const STATIC_I18N_KEYS = [
   'Master instances run scheduled background tasks.',
   'Worker instances do not run master-only background tasks.',
   'Drawing task polling',
+  'Channel-model recovery probes',
+  'Channel-model circuit breaker',
+  'Route disabled',
+  'Recovery probe succeeded',
+  'Recovery probe failed',
+  'Route recovered',
 
   // Pricing constants
   'Name',
@@ -371,6 +377,18 @@ export const STATIC_I18N_KEYS = [
 
   // Models section-registry nav (dynamic titleKey)
   'Grok',
+  'Channel-model circuit breaker',
+  'Channel-model recovery probes',
+  'Route disabled',
+  'Recovery probe succeeded',
+  'Recovery probe failed',
+  'Route recovered',
+
+  // GPT request parameter policy (dynamic labels)
+  'Disable fast',
+  'Allow client choice',
+  'Use client value',
+  'Cap at xhigh',
 
   // Channel Affinity section
   'Channel Affinity',

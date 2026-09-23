@@ -96,6 +96,10 @@ type NewAPIError struct {
 	errorCode      ErrorCode
 	StatusCode     int
 	Metadata       json.RawMessage
+	// upstreamStatusCode retains the status code the upstream actually returned
+	// when StatusCode is later rewritten by a channel status-code mapping.
+	// Zero means StatusCode was never rewritten.
+	upstreamStatusCode int
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -118,6 +122,32 @@ func (e *NewAPIError) GetErrorType() ErrorType {
 		return ""
 	}
 	return e.errorType
+}
+
+// UpstreamStatusCode returns the status code the upstream actually returned.
+// It equals StatusCode unless a channel status-code mapping rewrote it, so
+// callers that must reason about upstream behavior (channel health rules,
+// failure classification) stay correct under any mapping configuration.
+func (e *NewAPIError) UpstreamStatusCode() int {
+	if e == nil {
+		return 0
+	}
+	if e.upstreamStatusCode != 0 {
+		return e.upstreamStatusCode
+	}
+	return e.StatusCode
+}
+
+// RewriteStatusCode applies a channel status-code mapping while preserving the
+// original upstream status code for later inspection.
+func (e *NewAPIError) RewriteStatusCode(statusCode int) {
+	if e == nil || statusCode == e.StatusCode {
+		return
+	}
+	if e.upstreamStatusCode == 0 {
+		e.upstreamStatusCode = e.StatusCode
+	}
+	e.StatusCode = statusCode
 }
 
 func (e *NewAPIError) Error() string {

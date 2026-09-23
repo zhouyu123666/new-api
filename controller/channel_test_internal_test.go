@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -492,4 +493,130 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	require.Equal(t, http.StatusConflict, recorder.Code)
 	require.Contains(t, recorder.Body.String(), existing.TaskID)
 	require.Contains(t, recorder.Body.String(), "已有通道测试任务正在运行或等待中")
+}
+
+func TestDisablingChannelModelCircuitBreakerRestoresRoutes(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Log{}))
+	previousSetting := *operation_setting.GetMonitorSetting()
+	previousOptionMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	operation_setting.GetMonitorSetting().ChannelModelCircuitBreakerEnabled = true
+	t.Cleanup(func() {
+		*operation_setting.GetMonitorSetting() = previousSetting
+		common.OptionMap = previousOptionMap
+	})
+	require.NoError(t, db.Create(&model.ChannelModelStatus{
+		ChannelId: 1,
+		Model:     "gpt-5",
+		Reason:    "upstream returned 429",
+	}).Error)
+
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/option/",
+		strings.NewReader(`{"key":"monitor_setting.channel_model_circuit_breaker_enabled","value":false}`),
+	)
+
+	UpdateOption(ctx)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	var payload struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	assert.True(t, payload.Success)
+	assert.False(t, operation_setting.IsChannelModelCircuitBreakerEnabled())
+	var count int64
+	require.NoError(t, db.Model(&model.ChannelModelStatus{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestEnablingChannelModelCircuitBreakerClearsStaleRoutes(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Option{}, &model.Log{}))
+	previousSetting := *operation_setting.GetMonitorSetting()
+	previousOptionMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	operation_setting.GetMonitorSetting().ChannelModelCircuitBreakerEnabled = false
+	t.Cleanup(func() {
+		*operation_setting.GetMonitorSetting() = previousSetting
+		common.OptionMap = previousOptionMap
+	})
+	require.NoError(t, db.Create(&model.ChannelModelStatus{
+		ChannelId: 1,
+		Model:     "gpt-5",
+		Reason:    "stale failure",
+	}).Error)
+
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/option/",
+		strings.NewReader(`{"key":"monitor_setting.channel_model_circuit_breaker_enabled","value":true}`),
+	)
+
+	UpdateOption(ctx)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	var payload struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	assert.True(t, payload.Success)
+	assert.True(t, operation_setting.IsChannelModelCircuitBreakerEnabled())
+	var count int64
+	require.NoError(t, db.Model(&model.ChannelModelStatus{}).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestGetChannelModelEventsFiltersQueryableHistory(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.ChannelModelEvent{
+		{ChannelId: 1, ChannelName: "east", Model: "gpt-5", Event: model.ChannelModelEventDisabled, CreatedAt: 100},
+		{ChannelId: 1, ChannelName: "east", Model: "gpt-5", Event: model.ChannelModelEventRecovered, CreatedAt: 200},
+		{ChannelId: 2, ChannelName: "west", Model: "gpt-4", Event: model.ChannelModelEventDisabled, CreatedAt: 300},
+	}).Error)
+
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/channel/model-events?channel_id=1&model=gpt-5&event=recovered&start_time=150&end_time=250&p=1&page_size=20", nil)
+
+	GetChannelModelEvents(ctx)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Total int                       `json:"total"`
+			Items []model.ChannelModelEvent `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	assert.True(t, payload.Success)
+	assert.Equal(t, 1, payload.Data.Total)
+	require.Len(t, payload.Data.Items, 1)
+	assert.Equal(t, model.ChannelModelEventRecovered, payload.Data.Items[0].Event)
+}
+
+func TestUpdateOptionRejectsInvalidChannelModelRecoveryThreshold(t *testing.T) {
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Request = httptest.NewRequest(
+		http.MethodPut,
+		"/api/option/",
+		strings.NewReader(`{"key":"monitor_setting.channel_model_recovery_success_threshold","value":0}`),
+	)
+
+	UpdateOption(ctx)
+
+	require.Equal(t, http.StatusOK, response.Code)
+	var payload struct {
+		Success bool `json:"success"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+	assert.False(t, payload.Success)
 }

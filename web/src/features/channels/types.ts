@@ -51,6 +51,7 @@ export const channelSchema = z.object({
   balance: z.number().default(0), // in USD
   balance_updated_time: z.number(),
   models: z.string().default(''),
+  disabled_models: z.array(z.string()).default([]),
   group: z.string().default('default'),
   used_quota: z.number().default(0),
   model_mapping: z.string().nullish(),

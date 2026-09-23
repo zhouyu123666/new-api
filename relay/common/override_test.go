@@ -16,6 +16,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCapGPTReasoningEffortValueSupportsXHighCap(t *testing.T) {
+	assert.Equal(t, "xhigh", CapGPTReasoningEffortValue("max", "xhigh"))
+	assert.Equal(t, "xhigh", CapGPTReasoningEffortValue("xhigh", "xhigh"))
+	assert.Equal(t, "high", CapGPTReasoningEffortValue("high", "xhigh"))
+}
+
+func TestCapGPTReasoningEffortSupportsXHighCap(t *testing.T) {
+	out, err := CapGPTReasoningEffort([]byte(`{"reasoning":{"effort":"max"}}`), "xhigh")
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"reasoning":{"effort":"xhigh"}}`, string(out))
+}
+
 func TestApplyParamOverrideTrimPrefix(t *testing.T) {
 	// trim_prefix example:
 	// {"operations":[{"path":"model","mode":"trim_prefix","value":"openai/"}]}
@@ -2123,6 +2135,32 @@ func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
 	assertJSONEqual(t, input, string(out))
+}
+
+func TestRemoveCodexServiceTier(t *testing.T) {
+	out, err := RemoveCodexServiceTier([]byte(`{"model":"gpt-5.6-sol","service_tier":"fast","input":"hello"}`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"model":"gpt-5.6-sol","input":"hello"}`, string(out))
+}
+
+func TestNormalizeCodexServiceTier(t *testing.T) {
+	out, err := NormalizeCodexServiceTier([]byte(`{"model":"gpt-5.6-sol","service_tier":"fast"}`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"model":"gpt-5.6-sol","service_tier":"priority"}`, string(out))
+
+	out, err = NormalizeCodexServiceTier([]byte(`{"service_tier":"default"}`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"service_tier":"default"}`, string(out))
+}
+
+func TestCapCodexReasoningEffortAtHigh(t *testing.T) {
+	out, err := CapCodexReasoningEffortAtHigh([]byte(`{"reasoning":{"effort":"max"}}`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"reasoning":{"effort":"high"}}`, string(out))
+
+	out, err = CapCodexReasoningEffortAtHigh([]byte(`{"reasoning":{"effort":"medium"}}`))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"reasoning":{"effort":"medium"}}`, string(out))
 }
 
 func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {

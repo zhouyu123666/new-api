@@ -56,7 +56,8 @@ type Channel struct {
 	OtherSettings string `json:"settings" gorm:"column:settings"` // 其他设置，存储azure版本等不需要检索的信息，详见dto.ChannelOtherSettings
 
 	// cache info
-	Keys []string `json:"-" gorm:"-"`
+	Keys           []string `json:"-" gorm:"-"`
+	DisabledModels []string `json:"disabled_models,omitempty" gorm:"-"`
 }
 
 const ChannelStatusReasonAllKeysDisabled = "All keys are disabled"
@@ -449,6 +450,28 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 	return channel, nil
 }
 
+func AttachDisabledModels(channels []*Channel) error {
+	if len(channels) == 0 {
+		return nil
+	}
+	channelIDs := make([]int, 0, len(channels))
+	byID := make(map[int]*Channel, len(channels))
+	for _, channel := range channels {
+		channelIDs = append(channelIDs, channel.Id)
+		byID[channel.Id] = channel
+	}
+	var statuses []ChannelModelStatus
+	if err := DB.Where("channel_id IN ?", channelIDs).Order("model").Find(&statuses).Error; err != nil {
+		return err
+	}
+	for _, status := range statuses {
+		if channel := byID[status.ChannelId]; channel != nil {
+			channel.DisabledModels = append(channel.DisabledModels, status.Model)
+		}
+	}
+	return nil
+}
+
 func BatchInsertChannels(channels []Channel) error {
 	if len(channels) == 0 {
 		return nil
@@ -489,6 +512,10 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 	}
 	var deletedCount int64
 	for _, chunk := range lo.Chunk(ids, 200) {
+		if err := tx.Where("channel_id in (?)", chunk).Delete(&ChannelModelStatus{}).Error; err != nil {
+			tx.Rollback()
+			return 0, err
+		}
 		result := tx.Where("id in (?)", chunk).Delete(&Channel{})
 		if result.Error != nil {
 			tx.Rollback()
@@ -502,6 +529,9 @@ func BatchDeleteChannels(ids []int) (int64, error) {
 	}
 	if err := tx.Commit().Error; err != nil {
 		return 0, err
+	}
+	for _, channelID := range ids {
+		cacheClearChannelModelStatuses(channelID)
 	}
 	return deletedCount, nil
 }
@@ -625,13 +655,27 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
-	var err error
-	err = DB.Delete(channel).Error
-	if err != nil {
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if err := tx.Where("channel_id = ?", channel.Id).Delete(&ChannelModelStatus{}).Error; err != nil {
+		tx.Rollback()
 		return err
 	}
-	err = channel.DeleteAbilities()
-	return err
+	if err := tx.Where("channel_id = ?", channel.Id).Delete(&Ability{}).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Delete(channel).Error; err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	cacheClearChannelModelStatuses(channel.Id)
+	return nil
 }
 
 var channelStatusLock sync.Mutex
@@ -675,6 +719,29 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 	if len(keys) == 0 {
 		channel.Status = status
 	} else {
+		if status == common.ChannelStatusEnabled && channel.Status == common.ChannelStatusAutoDisabled {
+			// Recovery of an auto-disabled multi-key channel probes one available
+			// account, then clears only auto-disabled accounts. Manually disabled
+			// accounts must remain disabled after channel recovery.
+			for keyIndex, keyStatus := range channel.ChannelInfo.MultiKeyStatusList {
+				if keyStatus != common.ChannelStatusAutoDisabled {
+					continue
+				}
+				delete(channel.ChannelInfo.MultiKeyStatusList, keyIndex)
+				if channel.ChannelInfo.MultiKeyDisabledReason != nil {
+					delete(channel.ChannelInfo.MultiKeyDisabledReason, keyIndex)
+				}
+				if channel.ChannelInfo.MultiKeyDisabledTime != nil {
+					delete(channel.ChannelInfo.MultiKeyDisabledTime, keyIndex)
+				}
+			}
+			channel.Status = common.ChannelStatusEnabled
+			info := channel.GetOtherInfo()
+			info["status_reason"] = reason
+			info["status_time"] = common.GetTimestamp()
+			channel.SetOtherInfo(info)
+			return
+		}
 		keyIndex := -1
 		for i, key := range keys {
 			if key == usingKey {
@@ -919,11 +986,25 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
+	var channelIDs []int
+	if err := DB.Model(&Channel{}).Where("status = ?", status).Pluck("id", &channelIDs).Error; err != nil {
+		return 0, err
+	}
+	if err := ClearChannelModelStatusesByChannelIDs(channelIDs); err != nil {
+		return 0, err
+	}
 	result := DB.Where("status = ?", status).Delete(&Channel{})
 	return result.RowsAffected, result.Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
+	var channelIDs []int
+	if err := DB.Model(&Channel{}).Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Pluck("id", &channelIDs).Error; err != nil {
+		return 0, err
+	}
+	if err := ClearChannelModelStatusesByChannelIDs(channelIDs); err != nil {
+		return 0, err
+	}
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
 	return result.RowsAffected, result.Error
 }

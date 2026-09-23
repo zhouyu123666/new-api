@@ -41,7 +41,15 @@ func filterCandidateIDs(ids []int, modelName string, filters []dto.ChannelFilter
 	if len(ids) == 0 {
 		return ids, ""
 	}
-	kept = ids
+	kept = make([]int, 0, len(ids))
+	for _, id := range ids {
+		if !isChannelModelDisabledLocked(id, modelName) {
+			kept = append(kept, id)
+		}
+	}
+	if len(kept) == 0 {
+		return kept, ""
+	}
 	for _, kind := range filterEvalOrder {
 		kindFilters := filtersByKind(filters, kind)
 		if len(kindFilters) == 0 {

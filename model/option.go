@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"maps"
 	"strconv"
 	"strings"
@@ -228,6 +229,20 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	switch key {
+	case "global.gpt_request_policy.tags":
+		if len(strings.TrimSpace(value)) > 512 {
+			return fmt.Errorf("GPT channel tags must be at most 512 characters")
+		}
+	case "global.gpt_request_policy.fast_policy":
+		if value != "disabled" && value != "allow" {
+			return fmt.Errorf("invalid GPT fast service tier policy: %s", value)
+		}
+	case "global.gpt_request_policy.reasoning_policy":
+		if value != "client" && value != "cap_xhigh" {
+			return fmt.Errorf("invalid GPT reasoning policy: %s", value)
+		}
+	}
 	if err := operation_setting.ValidateQuotaOption(key, value); err != nil {
 		return err
 	}
@@ -243,7 +258,20 @@ func validateOptionValue(key string, value string) error {
 	return nil
 }
 
+func normalizeOptionValue(key string, value string) string {
+	switch key {
+	case "global.gpt_request_policy.tags":
+		return strings.TrimSpace(value)
+	case "global.gpt_request_policy.fast_policy",
+		"global.gpt_request_policy.reasoning_policy":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return value
+	}
+}
+
 func UpdateOption(key string, value string) error {
+	value = normalizeOptionValue(key, value)
 	if IsRequestPolicyOption(key) {
 		return UpdateRequestPolicyOptions(map[string]string{key: value})
 	}
@@ -287,10 +315,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 			return err
 		}
 	}
+	normalizedValues := make(map[string]string, len(values))
 	for key, value := range values {
+		value = normalizeOptionValue(key, value)
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
+		normalizedValues[key] = value
 	}
 	var policySnapshot *RequestPolicySnapshot
 	for key := range values {
@@ -298,7 +329,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 			requestPolicyOptionMutex.Lock()
 			defer requestPolicyOptionMutex.Unlock()
 			options := maps.Clone(CurrentRequestPolicy().Options)
-			for key, value := range values {
+			for key, value := range normalizedValues {
 				if IsRequestPolicyOption(key) {
 					options[key] = value
 				}
@@ -313,7 +344,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	}
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
+		for k, v := range normalizedValues {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
@@ -328,7 +359,7 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
+	for k, v := range normalizedValues {
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}

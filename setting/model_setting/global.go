@@ -19,6 +19,21 @@ type ChatCompletionsToResponsesPolicy struct {
 	ModelPatterns []string `json:"model_patterns,omitempty"`
 }
 
+type GPTRequestFastPolicy string
+
+const (
+	GPTRequestFastPolicyDisabled GPTRequestFastPolicy = "disabled"
+	GPTRequestFastPolicyAllow    GPTRequestFastPolicy = "allow"
+)
+
+type GPTRequestReasoningPolicy string
+
+const (
+	GPTRequestReasoningPolicyClient   GPTRequestReasoningPolicy = "client"
+	GPTRequestReasoningPolicyCapHigh  GPTRequestReasoningPolicy = "cap_high"
+	GPTRequestReasoningPolicyCapXHigh GPTRequestReasoningPolicy = "cap_xhigh"
+)
+
 func (p ChatCompletionsToResponsesPolicy) IsChannelEnabled(channelID int, channelType int) bool {
 	if !p.Enabled {
 		return false
@@ -43,6 +58,11 @@ type GlobalSettings struct {
 	// family whitelist but whose names already end in an effort word.
 	EffortTailModelIDs               []string                         `json:"effort_tail_model_ids"`
 	ChatCompletionsToResponsesPolicy ChatCompletionsToResponsesPolicy `json:"chat_completions_to_responses_policy"`
+	// GPTRequestPolicyTags is retained for backwards-compatible option
+	// migration. GPT request policies now apply to every supported GPT channel.
+	GPTRequestPolicyTags      string                    `json:"gpt_request_policy.tags"`
+	GPTRequestFastPolicy      GPTRequestFastPolicy      `json:"gpt_request_policy.fast_policy"`
+	GPTRequestReasoningPolicy GPTRequestReasoningPolicy `json:"gpt_request_policy.reasoning_policy"`
 }
 
 // 默认配置
@@ -63,6 +83,9 @@ var defaultOpenaiSettings = GlobalSettings{
 		Enabled:     false,
 		AllChannels: true,
 	},
+	GPTRequestPolicyTags:      "codex2api",
+	GPTRequestFastPolicy:      GPTRequestFastPolicyDisabled,
+	GPTRequestReasoningPolicy: GPTRequestReasoningPolicyClient,
 }
 
 // 全局实例
@@ -75,6 +98,48 @@ func init() {
 
 func GetGlobalSettings() *GlobalSettings {
 	return &globalSettings
+}
+
+// MatchesGPTRequestPolicyTag is retained for compatibility with older callers.
+// It is no longer used to activate the global GPT request policies.
+func (s *GlobalSettings) MatchesGPTRequestPolicyTag(channelTag string) bool {
+	if s == nil {
+		return false
+	}
+
+	channelTag = strings.TrimSpace(channelTag)
+	if channelTag == "" {
+		return false
+	}
+
+	for _, configuredTag := range strings.Split(s.GPTRequestPolicyTags, ",") {
+		if strings.TrimSpace(configuredTag) == channelTag {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *GlobalSettings) AllowsGPTFast(_ ...string) bool {
+	return s != nil && s.GPTRequestFastPolicy == GPTRequestFastPolicyAllow
+}
+
+func (s *GlobalSettings) GPTReasoningEffortCap(_ ...string) string {
+	if s == nil {
+		return ""
+	}
+	switch s.GPTRequestReasoningPolicy {
+	case GPTRequestReasoningPolicyCapHigh:
+		return "high"
+	case GPTRequestReasoningPolicyCapXHigh:
+		return "xhigh"
+	default:
+		return ""
+	}
+}
+
+func (s *GlobalSettings) CapsGPTReasoningAtHigh(_ ...string) bool {
+	return s.GPTReasoningEffortCap() == "high"
 }
 
 const thinkingBlacklistRegexPrefix = "re:"

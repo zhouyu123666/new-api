@@ -21,6 +21,9 @@ func IsChannelEnabledForGroupModel(group string, modelName string, channelID int
 	if group2model2channels == nil {
 		return false
 	}
+	if isChannelModelDisabledLocked(channelID, modelName) {
+		return false
+	}
 
 	if isChannelIDInList(group2model2channels[group][modelName], channelID) {
 		return true
@@ -45,6 +48,9 @@ func IsChannelEnabledForAnyGroupModel(groups []string, modelName string, channel
 }
 
 func isChannelEnabledForGroupModelDB(group string, modelName string, channelID int) bool {
+	if IsChannelModelDisabled(channelID, modelName) {
+		return false
+	}
 	var count int64
 	err := DB.Model(&Ability{}).
 		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, modelName, channelID, true).

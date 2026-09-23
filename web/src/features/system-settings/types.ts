@@ -21,6 +21,45 @@ export type SystemOption = {
   value: string
 }
 
+export type ChannelModelEventType =
+  | 'disabled'
+  | 'probe_success'
+  | 'probe_failed'
+  | 'recovered'
+
+export type ChannelModelEvent = {
+  id: number
+  channel_id: number
+  channel_name: string
+  model: string
+  event: ChannelModelEventType
+  status_code: number
+  success_count: number
+  reason: string
+  created_at: number
+}
+
+export type ChannelModelEventQuery = {
+  p: number
+  page_size: number
+  channel_id?: number
+  model?: string
+  event?: ChannelModelEventType
+  start_time?: number
+  end_time?: number
+}
+
+export type ChannelModelEventsResponse = {
+  success: boolean
+  message?: string
+  data?: {
+    page: number
+    page_size: number
+    total: number
+    items: ChannelModelEvent[]
+  }
+}
+
 export type SystemOptionKey = string
 
 export type SystemOptionsResponse = {
@@ -37,6 +76,10 @@ export type UpdateOptionRequest = {
 export type UpdateOptionResponse = {
   success: boolean
   message: string
+  data?: {
+    key: string
+    value: string
+  }
 }
 
 export interface PasskeyDomainChange {
@@ -60,7 +103,8 @@ export interface UpdatePasskeyDomainsRequest {
   removal_confirmation?: string
 }
 
-export interface UpdatePasskeyDomainsResponse extends UpdateOptionResponse {
+export interface UpdatePasskeyDomainsResponse
+  extends Omit<UpdateOptionResponse, 'data'> {
   code?: string
   data: PasskeyDomainChange
 }
@@ -230,6 +274,9 @@ export type ModelSettings = {
   'global.pass_through_request_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
+  'global.gpt_request_policy.tags': string
+  'global.gpt_request_policy.fast_policy': 'disabled' | 'allow'
+  'global.gpt_request_policy.reasoning_policy': 'client' | 'cap_xhigh'
   'general_setting.ping_interval_enabled': boolean
   'general_setting.ping_interval_seconds': number
   'gemini.safety_settings': string
@@ -266,6 +313,22 @@ export type ModelSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'monitor_setting.channel_model_circuit_breaker_enabled': boolean
+  'monitor_setting.channel_model_excluded_channel_ids': string
+  'monitor_setting.channel_error_window_minutes': number
+  'monitor_setting.channel_error_threshold': number
+  'monitor_setting.channel_error_consecutive_threshold': number
+  'monitor_setting.channel_error_status_codes': string
+  'monitor_setting.channel_model_recovery_enabled': boolean
+  'monitor_setting.channel_model_recovery_success_threshold': number
+  'monitor_setting.channel_model_recovery_delay_minutes': number
+  'monitor_setting.channel_model_recovery_interval_minutes': number
+  'monitor_setting.channel_model_recovery_concurrency': number
+  'monitor_setting.channel_model_event_retention_days': number
+  'monitor_setting.channel_model_wecom_bot_enabled': boolean
+  'monitor_setting.channel_model_wecom_bot_url': string
+  'monitor_setting.channel_model_wecom_bot_webhook_key_configured': boolean
+  'monitor_setting.channel_model_wecom_bot_contact': string
   'model_deployment.ionet.api_key': string
   'model_deployment.ionet.enabled': boolean
 }

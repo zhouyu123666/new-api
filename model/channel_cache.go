@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -22,6 +23,7 @@ var channelsIDM map[int]*Channel                     // all channels include dis
 // channel2advancedCustomConfig caches parsed Advanced Custom (type 58) configs so
 // path-aware selection avoids re-parsing JSON per request. Refreshed on full sync.
 var channel2advancedCustomConfig map[int]*kitdto.AdvancedCustomConfig
+var channel2disabledModels map[int]map[string]bool
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -44,6 +46,15 @@ func InitChannelCache() {
 	}
 	var abilities []*Ability
 	DB.Find(&abilities)
+	var disabledModels []ChannelModelStatus
+	DB.Find(&disabledModels)
+	newChannel2disabledModels := make(map[int]map[string]bool)
+	for _, status := range disabledModels {
+		if newChannel2disabledModels[status.ChannelId] == nil {
+			newChannel2disabledModels[status.ChannelId] = make(map[string]bool)
+		}
+		newChannel2disabledModels[status.ChannelId][status.Model] = true
+	}
 	groups := make(map[string]bool)
 	for _, ability := range abilities {
 		groups[ability.Group] = true
@@ -96,6 +107,7 @@ func InitChannelCache() {
 	}
 	channelsIDM = newChannelId2channel
 	channel2advancedCustomConfig = newChannel2advancedCustomConfig
+	channel2disabledModels = newChannel2disabledModels
 	channelSyncLock.Unlock()
 	// Lock ordering: InvalidatePricingCache acquires updatePricingLock, and
 	// GetPricing (holding updatePricingLock) nests channelSyncLock.RLock via
@@ -214,6 +226,70 @@ func GetRandomSatisfiedChannel(
 	}
 	// return null if no channel is not found
 	return nil, errors.New("channel not found")
+}
+
+// Caller must hold channelSyncLock.
+func isChannelModelDisabledLocked(channelID int, modelName string) bool {
+	return operation_setting.IsChannelModelCircuitBreakerEnabled() &&
+		!operation_setting.IsChannelModelCircuitBreakerExcluded(channelID) &&
+		channel2disabledModels[channelID] != nil && channel2disabledModels[channelID][modelName]
+}
+
+func cacheSetChannelModelDisabled(channelID int, modelName string, disabled bool) {
+	if !common.MemoryCacheEnabled {
+		return
+	}
+	channelSyncLock.Lock()
+	defer channelSyncLock.Unlock()
+	if disabled {
+		if channel2disabledModels == nil {
+			channel2disabledModels = make(map[int]map[string]bool)
+		}
+		if channel2disabledModels[channelID] == nil {
+			channel2disabledModels[channelID] = make(map[string]bool)
+		}
+		channel2disabledModels[channelID][modelName] = true
+		return
+	}
+	if channel2disabledModels[channelID] != nil {
+		delete(channel2disabledModels[channelID], modelName)
+		if len(channel2disabledModels[channelID]) == 0 {
+			delete(channel2disabledModels, channelID)
+		}
+	}
+}
+
+func cacheClearChannelModelStatuses(channelID int) {
+	if !common.MemoryCacheEnabled {
+		return
+	}
+	channelSyncLock.Lock()
+	delete(channel2disabledModels, channelID)
+	channelSyncLock.Unlock()
+}
+
+func cachePruneChannelModelStatuses(channelID int, disabledModels []string, stale []string) {
+	if !common.MemoryCacheEnabled {
+		return
+	}
+	staleSet := make(map[string]bool, len(stale))
+	for _, modelName := range stale {
+		staleSet[modelName] = true
+	}
+	channelSyncLock.Lock()
+	if channel2disabledModels == nil {
+		channel2disabledModels = make(map[int]map[string]bool)
+	}
+	channel2disabledModels[channelID] = make(map[string]bool)
+	for _, modelName := range disabledModels {
+		if !staleSet[modelName] {
+			channel2disabledModels[channelID][modelName] = true
+		}
+	}
+	if len(channel2disabledModels[channelID]) == 0 {
+		delete(channel2disabledModels, channelID)
+	}
+	channelSyncLock.Unlock()
 }
 
 func CacheGetChannel(id int) (*Channel, error) {

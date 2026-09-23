@@ -170,6 +170,7 @@ describe('quota adjustment log localization', () => {
         completion_tokens: 0,
         use_time: 0,
         is_stream: false,
+        fast_mode: false,
         channel: 0,
         channel_name: '',
         token_id: 0,

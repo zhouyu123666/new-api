@@ -118,6 +118,9 @@ type RelayInfo struct {
 	IsFirstRequest     bool
 	AudioUsage         bool
 	ReasoningEffort    string
+	// FastMode records whether the incoming request explicitly requested the
+	// fast service tier, even if channel policy removes it upstream.
+	FastMode bool
 	// ReasoningConversion is the suffix-derived reasoning intent attached
 	// after model mapping. Converters read it via ReasoningState().
 	ReasoningConversion *dto.ReasoningConversionState
@@ -594,6 +597,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
+		FastMode:        requestUsesFastServiceTier(request),
 
 		RequestId:  reqId,
 		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
@@ -643,6 +647,29 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	}
 
 	return info
+}
+
+func requestUsesFastServiceTier(request dto.Request) bool {
+	if request == nil {
+		return false
+	}
+
+	var serviceTier string
+	switch typedRequest := request.(type) {
+	case *dto.GeneralOpenAIRequest:
+		if len(typedRequest.ServiceTier) > 0 {
+			_ = common.Unmarshal(typedRequest.ServiceTier, &serviceTier)
+		}
+	case *dto.OpenAIResponsesRequest:
+		serviceTier = typedRequest.ServiceTier
+	case *dto.OpenAIResponsesCompactionRequest:
+		serviceTier = typedRequest.ServiceTier
+	case *dto.ClaudeRequest:
+		serviceTier = typedRequest.ServiceTier
+	}
+
+	tier := strings.ToLower(strings.TrimSpace(serviceTier))
+	return tier == "fast" || tier == "priority"
 }
 
 func cloneRequestHeaders(c *gin.Context) map[string]string {

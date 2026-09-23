@@ -196,6 +196,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.ResetChannelModelFailureConsecutive(channel.Id, relayInfo.OriginModelName)
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)
 			relayInfo.LastError = nil
 			return
@@ -697,6 +698,9 @@ func executeTaskSubmissionWith(
 		return nil, taskErr
 	}
 	if task.Status != model.TaskStatusFailure {
+		if relayInfo.ChannelMeta != nil {
+			service.ResetChannelModelFailureConsecutive(relayInfo.ChannelMeta.ChannelId, relayInfo.OriginModelName)
+		}
 		service.MarkRequestPolicySuccess(c, nil)
 	} else {
 		policy.AddEvent(service.PolicyEvent{Decision: service.PolicyDecision{Action: "stop", Reason: "task_failed", Source: "upstream"}})

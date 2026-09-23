@@ -66,7 +66,37 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		return
 	}
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, common.LocalLogPreview(err.MaskSensitiveErrorWithStatusCode())))
-	if ShouldDisableChannel(err) && channelError.AutoBan {
+	modelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	if relayInfo != nil && relayInfo.OriginModelName != "" {
+		modelName = relayInfo.OriginModelName
+	}
+	handledByModelCircuitBreaker := false
+	if operation_setting.IsChannelModelCircuitBreakerEnabled() &&
+		!operation_setting.IsChannelModelCircuitBreakerExcluded(channelError.ChannelId) &&
+		channelError.AutoBan && modelName != "" && !types.IsChannelError(err) {
+		handledByModelCircuitBreaker = true
+		if !model.IsChannelModelDisabled(channelError.ChannelId, modelName) {
+			reason := err.MaskSensitiveErrorWithStatusCode()
+			statusCode := err.UpstreamStatusCode()
+			if IsChannelModelFailureMatch(err) {
+				if RecordChannelModelFailure(channelError.ChannelId, modelName) {
+					gopool.Go(func() {
+						DisableChannelModel(channelError.ChannelId, modelName, channelError.ChannelName, reason, statusCode, channelError.AutoBan)
+					})
+				}
+			} else {
+				ResetChannelModelFailureConsecutive(channelError.ChannelId, modelName)
+				if ShouldDisableChannel(err) {
+					gopool.Go(func() {
+						DisableChannelModel(channelError.ChannelId, modelName, channelError.ChannelName, reason, statusCode, channelError.AutoBan)
+					})
+				}
+			}
+		}
+	} else {
+		ResetChannelModelFailureConsecutive(channelError.ChannelId, modelName)
+	}
+	if !handledByModelCircuitBreaker && ShouldDisableChannel(err) && channelError.AutoBan {
 		reason := err.MaskSensitiveErrorWithStatusCode()
 		gopool.Go(func() {
 			DisableChannel(channelError, reason)
